@@ -1,0 +1,26 @@
+{
+  "name": "aura",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "scripts": {
+    "build": "corepack pnpm --recursive run build",
+    "dev": "corepack pnpm --parallel --filter @aura/api --filter @aura/web dev",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "corepack pnpm --recursive run lint",
+    "test": "corepack pnpm --recursive run test",
+    "typecheck": "corepack pnpm --filter @aura/contracts build && corepack pnpm --recursive run typecheck"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.20.0",
+    "eslint": "^9.20.0",
+    "prettier": "^3.5.0",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.24.0"
+  }
+}

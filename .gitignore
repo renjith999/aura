@@ -1,0 +1,16 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+.vite/
+
+# Environment and local state
+.env
+.env.local
+!.env.example
+*.log
+
+# Tooling
+.turbo/
+.DS_Store
+Thumbs.db

@@ -7,10 +7,12 @@ coverage/
 # Environment and local state
 .env
 .env.local
+.env.*
 !.env.example
 *.log
 
 # Tooling
 .turbo/
+.vnv/
 .DS_Store
 Thumbs.db

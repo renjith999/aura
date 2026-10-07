@@ -1,11 +1,13 @@
 from fastapi import FastAPI
 
-app = FastAPI(
-    title="Aura API",
-    version="0.1.0",
-)
+from app.api.routes.chat import router as chat_router
+
+app = FastAPI()
 
 
 @app.get("/health")
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
+
+
+app.include_router(chat_router)

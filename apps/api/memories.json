@@ -1,0 +1,18 @@
+[
+  {
+    "id": "mem-005",
+    "content": "The Aura backend uses Python and FastAPI.",
+    "category": "technology",
+    "source": "user",
+    "created_at": "2026-10-12T16:51:59.553798+00:00",
+    "updated_at": "2026-10-12T16:51:59.554355+00:00"
+  },
+  {
+    "id": "mem-002",
+    "content": "The Aura backend uses Python and FastAPI with improved memory retrieval.",
+    "category": "technology",
+    "source": "user",
+    "created_at": "2026-10-12T16:53:05.207229+00:00",
+    "updated_at": "2026-10-12T16:55:56.446258+00:00"
+  }
+]

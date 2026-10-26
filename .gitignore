@@ -16,3 +16,9 @@ coverage/
 .vnv/
 .DS_Store
 Thumbs.db
+
+__pycache__/
+*.py[cod]
+# API test artifacts
+apps/api/.pytest-tmp/
+apps/api/.pytest_cache/

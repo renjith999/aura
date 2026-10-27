@@ -3,10 +3,10 @@ from unittest.mock import patch
 import pytest
 
 from app.services.tool_executor import (
-    ToolExecutionError,
     SEARCH_MEMORIES_SCHEMA,
-    execute_tool,
     TOOL_REGISTRY,
+    ToolExecutionError,
+    execute_tool,
 )
 
 
@@ -68,6 +68,7 @@ def test_search_tool_accepts_top_k_boundaries(top_k):
         min_score=0.25,
     )
 
+
 def test_search_tool_returns_retrieved_memories():
     expected = [
         {
@@ -100,6 +101,7 @@ def test_search_tool_returns_retrieved_memories():
         min_score=0.25,
     )
 
+
 def test_search_tool_wraps_retrieval_error():
     with patch(
         "app.services.tool_executor.retrieve_memories",
@@ -120,6 +122,7 @@ def test_search_tool_wraps_retrieval_error():
     assert isinstance(exc_info.value.__cause__, RuntimeError)
     assert "Storage unavailable" not in str(exc_info.value)
 
+
 def test_search_memories_schema_has_required_arguments():
     assert SEARCH_MEMORIES_SCHEMA["name"] == "search_memories"
     assert SEARCH_MEMORIES_SCHEMA["strict"] is True
@@ -132,8 +135,10 @@ def test_search_memories_schema_has_required_arguments():
     assert properties["query"]["type"] == "string"
     assert properties["top_k"]["type"] == "integer"
 
+
 def test_schema_name_matches_registered_tool():
     assert SEARCH_MEMORIES_SCHEMA["name"] in TOOL_REGISTRY
+
 
 def test_unexpected_argument_returns_structured_failure():
     result = execute_tool(

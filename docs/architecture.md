@@ -1,36 +1,30 @@
-# Aura architecture — Phase 0
+# Aura architecture
 
-## Purpose
+## Backend direction
 
-Phase 0 provides a safe, repeatable base for product development. It deliberately
-does not decide ingestion sources, retrieval strategy, provider selection, or UI
-workflows.
+The authoritative API runtime is Python + FastAPI in `apps/api/app`. The TypeScript/Fastify bootstrap in `apps/api/src` belongs to the earlier Phase 0 baseline. It remains as legacy reference code and is not a supported backend or startup path.
 
-## Boundaries
+## Current boundaries
 
-- **Web (`@aura/web`)** owns browser rendering and user interaction.
-- **API (`@aura/api`)** owns HTTP transport, authentication, orchestration, and
-  access control. Clients must not connect directly to backing services.
-- **Contracts (`@aura/contracts`)** owns public request/response schemas and
-  shared domain types. It must not import either application.
-- **PostgreSQL** is the durable source of truth; **Redis** is reserved for
-  ephemeral caching, jobs, and rate limiting.
+- **Web (`apps/web`)** owns browser rendering and user interaction.
+- **API (`apps/api/app`)** owns HTTP handling and backend application behavior. FastAPI publishes the interactive OpenAPI documentation at `/docs`.
+- **Contracts (`packages/contracts`)** contains shared TypeScript contracts for the web workspace. Python request and response models belong with the FastAPI application and should be aligned with these contracts as API endpoints are formalized.
+- **Configuration** comes from environment variables; local values belong in ignored `.env` files, based on the checked-in examples.
 
-## Initial deployment shape
+## Local development shape
 
-```
-Browser → web → API → PostgreSQL
-                       ↘ Redis
+```text
+Browser → React/Vite web client → Python/FastAPI API
+                                  ├─ health endpoint
+                                  ├─ chat route
+                                  └─ memory search route
 ```
 
-The web and API are independently deployable. Environment variables configure
-their connection, and secrets remain in the deployment platform rather than the
-repository.
+Use `pnpm dev` to start the supported FastAPI and web development servers, or start either workspace separately. The API listens on port 8000 by default. The legacy Fastify bootstrap is not part of this runtime shape.
 
-## Phase 0 exit criteria
+## Delivery notes
 
-- A new contributor can boot the web app, API, PostgreSQL, and Redis locally.
-- The API exposes a dependency-free health endpoint.
-- Shared API contracts are imported by both application boundaries.
-- CI type-checks, lints, tests, and builds every workspace.
-- No credentials or production infrastructure assumptions are committed.
+- Python 3.13 is the backend runtime for Phase 1.
+- The FastAPI service is still being verified and its API, persistence, and service boundaries remain active Phase 1 work.
+- PostgreSQL, Redis, authentication, and later AI capabilities must be described as implemented only after the corresponding work lands; do not infer them from the original Phase 0 architecture.
+- Keep secrets out of the repository and use environment configuration for local development.

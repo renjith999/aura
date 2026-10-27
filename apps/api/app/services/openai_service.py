@@ -1,11 +1,13 @@
-from openai import AsyncOpenAI
 import json
 from json import JSONDecodeError
+
+from openai import AsyncOpenAI
+
 from app.core.config import settings
 from app.services.tool_executor import (
     SEARCH_MEMORIES_SCHEMA,
-    execute_tool,
     ToolExecutionError,
+    execute_tool,
 )
 
 
@@ -28,11 +30,9 @@ class OpenAIService:
             tools=[SEARCH_MEMORIES_SCHEMA],
         )
 
-        for iteration in range(2):
+        for _iteration in range(2):
             tool_calls = [
-                item
-                for item in response.output
-                if item.type == "function_call"
+                item for item in response.output if item.type == "function_call"
             ]
 
             if not tool_calls:
@@ -66,6 +66,4 @@ class OpenAIService:
                 tools=[SEARCH_MEMORIES_SCHEMA],
             )
 
-        raise ToolExecutionError(
-            "Tool-calling limit reached."
-        )
+        raise ToolExecutionError("Tool-calling limit reached.")

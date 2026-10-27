@@ -96,6 +96,4 @@ def execute_tool(
             "error": "Invalid tool arguments.",
         }
     except Exception as exc:
-        raise ToolExecutionError(
-            "Tool execution failed."
-        ) from exc
+        raise ToolExecutionError("Tool execution failed.") from exc

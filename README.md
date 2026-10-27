@@ -1,44 +1,47 @@
 # Aura
 
-Aura is an AI unified recall assistant: a private place to collect, search, and
-retrieve the context that matters to you.
+Aura is an AI unified recall assistant: a private place to collect, search, and retrieve the context that matters to you.
 
-## Repository
+## Backend direction
 
-This repository is a TypeScript monorepo managed with [pnpm](https://pnpm.io/).
-Phase 0 establishes the development foundation; product workflows have not been
-implemented yet.
+The supported backend is Python + FastAPI in `apps/api/app`. The TypeScript/Fastify bootstrap in `apps/api/src` is legacy code from the earlier Phase 0 baseline. It is retained for reference and is not a supported runtime or startup path.
 
-```
+## Repository layout
+
+```text
 apps/
-  api/              Fastify service and health endpoint
+  api/app/          Python + FastAPI backend (authoritative)
+  api/src/          Legacy TypeScript/Fastify code (reference only)
   web/              React + Vite client shell
 packages/
-  contracts/        Shared API types and validation schemas
-infra/              Local PostgreSQL and Redis services
-docs/               Architecture and delivery decisions
+  contracts/        Shared TypeScript contracts used by the web workspace
 ```
+
+## Prerequisites
+
+- Python 3.13
+- uv
+- Node.js 22 or newer and pnpm 9 (`corepack enable` is recommended)
 
 ## Quick start
 
-1. Install Node.js 22+ and pnpm 9+ (or run `corepack enable`).
-2. Copy `.env.example` to `.env` and adjust values if needed.
-3. Start local dependencies: `docker compose up -d`.
-4. Install packages: `pnpm install`.
-5. Start the apps: `pnpm dev`.
+1. Copy `apps/api/.env.example` to `apps/api/.env` and set any local values you need.
+2. Install Python dependencies: `uv sync --project apps/api --group dev`.
+3. Install JavaScript workspace dependencies: `pnpm install`.
+4. Start the supported API and web development servers: `pnpm dev`.
 
-The web app runs on `http://localhost:5173`; the API health check is available
-at `http://localhost:3000/health`.
+The FastAPI service runs at `http://localhost:8000`. Its health endpoint is `http://localhost:8000/health`, and Swagger UI is at `http://localhost:8000/docs`. To start only one app, run `pnpm --filter @aura/api dev` or `pnpm --filter @aura/web dev`.
 
 ## Useful commands
 
-| Command             | Purpose                             |
-| ------------------- | ----------------------------------- |
-| `pnpm dev`          | Run API and web in watch mode       |
-| `pnpm build`        | Type-check and build all workspaces |
-| `pnpm lint`         | Run ESLint                          |
-| `pnpm test`         | Run unit tests                      |
-| `pnpm format:check` | Verify formatting                   |
+| Command | Purpose |
+| --- | --- |
+| `pnpm dev` | Run the FastAPI backend and web client in watch mode |
+| `pnpm --filter @aura/api dev` | Run only the FastAPI backend |
+| `pnpm --filter @aura/web dev` | Run only the web client |
+| From `apps/api/`: `uv run pytest` | Run Python tests |
+| From `apps/api/`: `uv run ruff check .` | Lint Python code |
+| `pnpm build` | Build JavaScript workspaces |
+| `pnpm lint` | Lint JavaScript workspaces |
 
-See [the architecture notes](docs/architecture.md) for Phase 0 boundaries and
-[the contribution guide](CONTRIBUTING.md) for repository conventions.
+See [the architecture notes](docs/architecture.md) for the current backend direction and [the contribution guide](CONTRIBUTING.md) for repository conventions.

@@ -67,9 +67,7 @@ async def test_generate_response_with_tools_executes_function_call():
             },
         ) as mock_execute,
     ):
-        result = await service.generate_response_with_tools(
-            "What do I remember?"
-        )
+        result = await service.generate_response_with_tools("What do I remember?")
 
     assert result == "Aura found your memories."
     mock_execute.assert_called_once_with(
@@ -85,6 +83,7 @@ async def test_generate_response_with_tools_executes_function_call():
     assert submitted_output["type"] == "function_call_output"
     assert submitted_output["call_id"] == "call_test_123"
     assert json.loads(submitted_output["output"])["ok"] is True
+
 
 @pytest.mark.asyncio
 async def test_malformed_tool_arguments_return_controlled_error():
@@ -114,9 +113,7 @@ async def test_malformed_tool_arguments_return_controlled_error():
         new_callable=AsyncMock,
         side_effect=[first_response, final_response],
     ) as mock_create:
-        result = await service.generate_response_with_tools(
-            "What do I remember?"
-        )
+        result = await service.generate_response_with_tools("What do I remember?")
 
     assert result == "I couldn't search the memories this time."
     assert mock_create.await_count == 2
@@ -128,6 +125,7 @@ async def test_malformed_tool_arguments_return_controlled_error():
     assert tool_result["error"] == (
         "Invalid tool arguments. Please provide valid JSON."
     )
+
 
 @pytest.mark.asyncio
 async def test_tool_calling_stops_after_three_iterations():

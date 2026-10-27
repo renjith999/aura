@@ -1,3 +1,4 @@
+import pytest
 
 import memory_store
 
@@ -55,21 +56,15 @@ def test_search_memories_finds_matching_memory(tmp_path, monkeypatch):
         "technology",
     )
 
-    results = memory_store.search_memories(
-        "Aura Python"
-    )
+    results = memory_store.search_memories("Aura Python")
 
     assert len(results) == 1
-    assert results[0]["content"] == (
-        "The Aura backend uses Python and FastAPI."
-    )
+    assert results[0]["content"] == ("The Aura backend uses Python and FastAPI.")
     assert results[0]["match_count"] == 2
     assert results[0]["matched_words"] == ["aura", "python"]
 
 
-def test_update_memory_preserves_id_and_creation_time(
-    tmp_path, monkeypatch
-):
+def test_update_memory_preserves_id_and_creation_time(tmp_path, monkeypatch):
     monkeypatch.setattr(
         memory_store,
         "MEMORY_FILE",
@@ -101,16 +96,11 @@ def test_update_memory_rejects_empty_content(tmp_path, monkeypatch):
 
     memory_store.save_memory("Aura uses Python", "technology")
 
-    try:
+    with pytest.raises(ValueError, match="Memory content cannot be empty"):
         memory_store.update_memory("mem-001", "   ")
-        assert False, "Expected ValueError"
-    except ValueError as error:
-        assert str(error) == "Memory content cannot be empty"
 
 
-def test_find_similar_memories_detects_related_content(
-    tmp_path, monkeypatch
-):
+def test_find_similar_memories_detects_related_content(tmp_path, monkeypatch):
     monkeypatch.setattr(
         memory_store,
         "MEMORY_FILE",
@@ -131,9 +121,7 @@ def test_find_similar_memories_detects_related_content(
     assert results[0]["matched_words"] == ["aura", "python"]
 
 
-def test_review_new_memory_requests_review_for_similar_content(
-    tmp_path, monkeypatch
-):
+def test_review_new_memory_requests_review_for_similar_content(tmp_path, monkeypatch):
     monkeypatch.setattr(
         memory_store,
         "MEMORY_FILE",
@@ -145,27 +133,21 @@ def test_review_new_memory_requests_review_for_similar_content(
         "technology",
     )
 
-    result = memory_store.review_new_memory(
-        "I am learning Python for my Aura project"
-    )
+    result = memory_store.review_new_memory("I am learning Python for my Aura project")
 
     assert result["action"] == "review"
     assert len(result["matches"]) == 1
 
 
 def test_resolve_memory_rejects_unknown_decision():
-    try:
+    with pytest.raises(ValueError, match="decision must be"):
         memory_store.resolve_memory(
             "Aura uses Python",
             "unknown",
         )
-        assert False, "Expected ValueError"
-    except ValueError as error:
-        assert "decision must be" in str(error)
 
-def test_resolve_memory_update_preserves_id_and_changes_content(
-    tmp_path, monkeypatch
-):
+
+def test_resolve_memory_update_preserves_id_and_changes_content(tmp_path, monkeypatch):
     monkeypatch.setattr(
         memory_store,
         "MEMORY_FILE",
@@ -189,7 +171,6 @@ def test_resolve_memory_update_preserves_id_and_changes_content(
     assert len(memory_store.load_memories()) == 1
 
 
-
 def test_update_memory_rejects_empty_category_without_changing_record(
     tmp_path, monkeypatch
 ):
@@ -204,15 +185,12 @@ def test_update_memory_rejects_empty_category_without_changing_record(
         "technology",
     )
 
-    try:
+    with pytest.raises(ValueError, match="Memory category cannot be empty"):
         memory_store.update_memory(
             original["id"],
             "Aura uses Python and FastAPI",
             new_category="   ",
         )
-        assert False, "Expected ValueError"
-    except ValueError as error:
-        assert str(error) == "Memory category cannot be empty"
 
     stored = memory_store.load_memories()[0]
     assert stored["content"] == original["content"]
@@ -226,17 +204,11 @@ def test_update_memory_rejects_unknown_id(tmp_path, monkeypatch):
         tmp_path / "memories.json",
     )
 
-    try:
+    with pytest.raises(ValueError, match="Memory not found: mem-does-not-exist"):
         memory_store.update_memory(
             "mem-does-not-exist",
             "New content",
         )
-        assert False, "Expected ValueError"
-    except ValueError as error:
-        assert str(error) == "Memory not found: mem-does-not-exist"
-
-
-import memory_store
 
 
 def test_update_memory_rejects_duplicate_content_without_changing_records(
@@ -251,21 +223,19 @@ def test_update_memory_rejects_duplicate_content_without_changing_records(
     original = memory_store.save_memory("Aura uses Python", "technology")
     duplicate = memory_store.save_memory("Aura uses Rust", "technology")
 
-    try:
+    with pytest.raises(
+        ValueError,
+        match=f"Memory content already exists: {original['id']}",
+    ):
         memory_store.update_memory(
             duplicate["id"],
             "  AURA   USES PYTHON  ",
         )
-        assert False, "Expected ValueError"
-    except ValueError as error:
-        assert str(error) == f"Memory content already exists: {original['id']}"
 
     assert memory_store.load_memories() == [original, duplicate]
 
 
-def test_update_memory_rejects_duplicate_content(
-    tmp_path, monkeypatch
-):
+def test_update_memory_rejects_duplicate_content(tmp_path, monkeypatch):
     monkeypatch.setattr(
         memory_store,
         "MEMORY_FILE",
@@ -281,14 +251,14 @@ def test_update_memory_rejects_duplicate_content(
         "technology",
     )
 
-    try:
+    with pytest.raises(
+        ValueError,
+        match=f"Memory content already exists: {first['id']}",
+    ):
         memory_store.update_memory(
             second["id"],
             "  AURA   USES PYTHON ",
         )
-        assert False, "Expected ValueError"
-    except ValueError as error:
-        assert str(error) == f"Memory content already exists: {first['id']}"
 
     stored = memory_store.load_memories()
 

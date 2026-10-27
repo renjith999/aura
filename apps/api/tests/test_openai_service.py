@@ -8,9 +8,16 @@ from app.services.openai_service import OpenAIService
 from app.services.tool_executor import ToolExecutionError
 
 
+def create_test_service():
+    client = SimpleNamespace(
+        responses=SimpleNamespace(create=AsyncMock()),
+    )
+    return OpenAIService(client=client)
+
+
 @pytest.mark.asyncio
 async def test_generate_response_with_tools_returns_normal_response():
-    service = OpenAIService()
+    service = create_test_service()
 
     response = SimpleNamespace(
         output=[],
@@ -31,7 +38,7 @@ async def test_generate_response_with_tools_returns_normal_response():
 
 @pytest.mark.asyncio
 async def test_generate_response_with_tools_executes_function_call():
-    service = OpenAIService()
+    service = create_test_service()
 
     tool_call = SimpleNamespace(
         type="function_call",
@@ -87,7 +94,7 @@ async def test_generate_response_with_tools_executes_function_call():
 
 @pytest.mark.asyncio
 async def test_malformed_tool_arguments_return_controlled_error():
-    service = OpenAIService()
+    service = create_test_service()
 
     tool_call = SimpleNamespace(
         type="function_call",
@@ -129,7 +136,7 @@ async def test_malformed_tool_arguments_return_controlled_error():
 
 @pytest.mark.asyncio
 async def test_tool_calling_stops_after_three_iterations():
-    service = OpenAIService()
+    service = create_test_service()
 
     tool_call = SimpleNamespace(
         type="function_call",

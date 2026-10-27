@@ -13,7 +13,7 @@ coverage/
 
 # Tooling
 .turbo/
-.vnv/
+.venv/
 .DS_Store
 Thumbs.db
 

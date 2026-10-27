@@ -34,14 +34,14 @@ The FastAPI service runs at `http://localhost:8000`. Its health endpoint is `htt
 
 ## Useful commands
 
-| Command | Purpose |
-| --- | --- |
-| `pnpm dev` | Run the FastAPI backend and web client in watch mode |
-| `pnpm --filter @aura/api dev` | Run only the FastAPI backend |
-| `pnpm --filter @aura/web dev` | Run only the web client |
-| From `apps/api/`: `uv run pytest` | Run Python tests |
-| From `apps/api/`: `uv run ruff check .` | Lint Python code |
-| `pnpm build` | Build JavaScript workspaces |
-| `pnpm lint` | Lint JavaScript workspaces |
+| Command                                 | Purpose                                              |
+| --------------------------------------- | ---------------------------------------------------- |
+| `pnpm dev`                              | Run the FastAPI backend and web client in watch mode |
+| `pnpm --filter @aura/api dev`           | Run only the FastAPI backend                         |
+| `pnpm --filter @aura/web dev`           | Run only the web client                              |
+| From `apps/api/`: `uv run pytest`       | Run Python tests                                     |
+| From `apps/api/`: `uv run ruff check .` | Lint Python code                                     |
+| `pnpm build`                            | Build JavaScript workspaces                          |
+| `pnpm lint`                             | Lint JavaScript workspaces                           |
 
 See [the architecture notes](docs/architecture.md) for the current backend direction and [the contribution guide](CONTRIBUTING.md) for repository conventions.

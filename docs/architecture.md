@@ -16,8 +16,8 @@ The authoritative API runtime is Python + FastAPI in `apps/api/app`. The TypeScr
 ```text
 Browser → React/Vite web client → Python/FastAPI API
                                   ├─ health endpoint
-                                  ├─ chat route
-                                  └─ memory search route
+                                  ├─ chat route → OpenAI service
+                                  └─ memory CRUD/search → service → repository → PostgreSQL
 ```
 
 Use `pnpm dev` to start the supported FastAPI and web development servers, or start either workspace separately. The API listens on port 8000 by default. The legacy Fastify bootstrap is not part of this runtime shape.
@@ -25,6 +25,6 @@ Use `pnpm dev` to start the supported FastAPI and web development servers, or st
 ## Delivery notes
 
 - Python 3.13 is the backend runtime for Phase 1.
-- The FastAPI service is still being verified and its API, persistence, and service boundaries remain active Phase 1 work.
-- PostgreSQL, Redis, authentication, and later AI capabilities must be described as implemented only after the corresponding work lands; do not infer them from the original Phase 0 architecture.
+- Memory CRUD and deterministic keyword search use PostgreSQL through a service/repository boundary and Alembic migrations. The memory route accepts an authenticated user ID through a dependency; account authentication integration remains in AURA-33.
+- Do not add AI transformations, embeddings, or semantic search to Phase 1 memory storage. Redis and later AI capabilities remain future work.
 - Keep secrets out of the repository and use environment configuration for local development.

@@ -41,6 +41,8 @@ uv run alembic upgrade head
 
 Create an account and sign in through `/auth/register` and `/auth/login`. Passwords are stored as salted PBKDF2-SHA256 hashes. Sign-in returns a random opaque bearer token; only its SHA-256 hash is stored in PostgreSQL. Tokens expire after `ACCESS_TOKEN_TTL_SECONDS` (default `86400`); `POST /auth/logout` revokes the current token. Clients send the token in the `Authorization: Bearer <access-token>` header. No signing secret is needed because tokens are random and validated against the database.
 
+For the local React client, `WEB_ORIGIN` sets the allowed browser origin and defaults to `http://localhost:5173`. The client API URL can be set with `VITE_API_URL`.
+
 The memory routes require a valid bearer token and scope each read, update, and delete to the signed-in user. The API supports:
 
 | Method   | Path                    | Behavior                                                                                  |

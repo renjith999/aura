@@ -112,6 +112,21 @@ def test_memory_routes_reject_missing_or_invalid_bearer_tokens(auth_client):
     )
 
 
+def test_api_allows_the_configured_web_origin(auth_client):
+    client, _ = auth_client
+    response = client.options(
+        "/auth/login",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
 def test_second_user_cannot_read_update_or_delete_first_users_memory(auth_client):
     client, _ = auth_client
     first = register(client).json()

@@ -7,14 +7,14 @@ from memory_store import load_memories
 
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
-model = SentenceTransformer(MODEL_NAME)
+model = None
 
 _cached_memories = None
 _cached_embeddings = None
 
 
 def _get_memory_embeddings(memories):
-    global _cached_memories, _cached_embeddings
+    global _cached_memories, _cached_embeddings, model
 
     # Reuse cached embeddings if the stored memories haven't changed.
     if memories == _cached_memories and _cached_embeddings is not None:
@@ -24,6 +24,9 @@ def _get_memory_embeddings(memories):
 
     if not contents:
         return None
+
+    if model is None:
+        model = SentenceTransformer(MODEL_NAME)
 
     _cached_embeddings = model.encode(
         contents,

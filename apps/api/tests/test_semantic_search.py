@@ -1,10 +1,7 @@
-
 import semantic_search
 
 
-def test_semantic_search_returns_relevant_memories(
-    tmp_path, monkeypatch
-):
+def test_semantic_search_returns_relevant_memories(tmp_path, monkeypatch):
     monkeypatch.setattr(
         semantic_search,
         "load_memories",
@@ -70,9 +67,7 @@ def test_semantic_search_respects_top_k(monkeypatch):
 def test_memory_embeddings_are_cached(monkeypatch):
     import semantic_search
 
-    memories = [
-        {"id": "mem-1", "content": "Aura uses Python and FastAPI"}
-    ]
+    memories = [{"id": "mem-1", "content": "Aura uses Python and FastAPI"}]
 
     monkeypatch.setattr(
         semantic_search,
@@ -112,12 +107,11 @@ def test_memory_embeddings_are_cached(monkeypatch):
 
     assert memory_encoding_calls == 1
 
+
 def test_memory_embeddings_refresh_when_content_changes(monkeypatch):
     import semantic_search
 
-    memories = [
-        {"id": "mem-1", "content": "Aura uses Python"}
-    ]
+    memories = [{"id": "mem-1", "content": "Aura uses Python"}]
 
     monkeypatch.setattr(
         semantic_search,

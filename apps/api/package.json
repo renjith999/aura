@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "dev": "tsx watch src/server.ts",
+    "dev": "uv run uvicorn app.main:app --reload --port 8000",
     "lint": "eslint src",
     "test": "node --test",
     "typecheck": "tsc --noEmit -p tsconfig.json"

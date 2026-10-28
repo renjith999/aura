@@ -8,11 +8,14 @@ dependencies = [
     "uvicorn[standard]>=0.35,<1.0",
     "pydantic-settings>=2.0,<3.0",
     "httpx2>=2.13,<3.0",
+    "openai>=1.0,<3.0",
+    "sentence-transformers>=3.0,<6.0",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8.0,<10.0",
+    "pytest-asyncio>=1.0,<2.0",
     "ruff>=0.12,<1.0",
 ]
 

@@ -1,4 +1,3 @@
-
 import pytest
 
 import memory_retriever
@@ -89,6 +88,7 @@ def test_retrieve_memories_respects_top_k(monkeypatch):
 
     assert len(results) == 2
 
+
 def test_retrieve_memories_filters_results_below_min_score(monkeypatch):
     monkeypatch.setattr(
         memory_retriever,
@@ -129,9 +129,7 @@ def test_retrieve_memories_returns_empty_when_all_scores_below_threshold(
     monkeypatch.setattr(
         memory_retriever,
         "semantic_search",
-        lambda query, top_k: [
-            {"id": "mem-1", "content": "Python", "similarity": 0.1}
-        ],
+        lambda query, top_k: [{"id": "mem-1", "content": "Python", "similarity": 0.1}],
     )
 
     results = memory_retriever.retrieve_memories(

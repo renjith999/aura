@@ -1,3 +1,4 @@
+// Legacy TypeScript/Fastify bootstrap from Phase 0. Python/FastAPI is authoritative.
 import Fastify from 'fastify';
 import type { HealthResponse } from '@aura/contracts';
 

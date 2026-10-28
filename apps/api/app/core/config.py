@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -9,6 +10,7 @@ class Settings(BaseSettings):
 
     openai_api_key: str = ""
     database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/aura"
+    access_token_ttl_seconds: int = Field(default=86400, gt=0, le=2_592_000)
 
     model_config = SettingsConfigDict(
         env_file=".env",

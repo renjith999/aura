@@ -87,6 +87,7 @@ Development keeps the existing local database default. Production must set `ENVI
 API errors use a stable JSON shape while preserving the `detail` field used by the web client. For example, validation errors return `{"detail":"Request validation failed.","code":"validation_error"}`, missing records return `{"detail":"Memory not found.","code":"not_found"}`, and unexpected failures return `{"detail":"An unexpected error occurred.","code":"internal_error"}`. Responses include an `X-Request-ID` header for support and log correlation.
 
 Request logs include the request ID, method, path, status, and duration. Unexpected errors add the exception type. Request bodies, query strings, authorization headers, credentials, and note contents are not logged.
+
 ## Python checks
 
 Run these from `apps/api/`:

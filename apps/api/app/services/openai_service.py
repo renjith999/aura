@@ -14,7 +14,9 @@ from app.services.tool_executor import (
 
 class OpenAIService:
     def __init__(self, client: AsyncOpenAI | None = None) -> None:
-        self.client: Any = client or AsyncOpenAI(api_key=settings.openai_api_key)
+        self.client: Any = client or AsyncOpenAI(
+            api_key=settings.openai_api_key.get_secret_value()
+        )
 
     async def generate_response(self, message: str) -> str:
         response = await self.client.responses.create(

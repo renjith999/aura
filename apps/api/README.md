@@ -19,7 +19,7 @@ Then run the API from its application directory:
 
 ```bash
 cd apps/api
-uv run uvicorn app.main:app --reload --port 8000
+uv run python -m app
 ```
 
 Or, after installing the JavaScript workspace dependencies, run it through pnpm from the repository root:
@@ -78,6 +78,15 @@ curl -X POST http://localhost:8000/auth/register \
 
 List/search example: `GET /memories?query=project&category=work&is_favorite=false`. Search is a deterministic case-insensitive text match across title and content; results are ordered by newest creation time, then stable ID. Unknown and non-owned IDs return the same `404` response.
 
+## Runtime configuration and errors
+
+Settings are loaded from environment variables or `apps/api/.env`; values in the environment take precedence. `apps/api/.env.example` lists the supported settings. `API_PORT` must be from 1 to 65535, `ACCESS_TOKEN_TTL_SECONDS` must be from 1 to 2592000, `WEB_ORIGIN` must be an HTTP(S) origin, and `DATABASE_URL` must be a valid SQLAlchemy URL. `OPENAI_API_KEY` is optional when the chat endpoint is not used; `/chat` returns `503` with a configuration error when the key is unset. `LOG_LEVEL` accepts DEBUG, INFO, WARNING, ERROR, or CRITICAL.
+
+Development keeps the existing local database default. Production must set `ENVIRONMENT=production` and provide `DATABASE_URL` explicitly; SQLite is rejected in production. Invalid settings fail during application startup. The OpenAI key and database URL are held as redacted secret settings.
+
+API errors use a stable JSON shape while preserving the `detail` field used by the web client. For example, validation errors return `{"detail":"Request validation failed.","code":"validation_error"}`, missing records return `{"detail":"Memory not found.","code":"not_found"}`, and unexpected failures return `{"detail":"An unexpected error occurred.","code":"internal_error"}`. Responses include an `X-Request-ID` header for support and log correlation.
+
+Request logs include the request ID, method, path, status, and duration. Unexpected errors add the exception type. Request bodies, query strings, authorization headers, credentials, and note contents are not logged.
 ## Python checks
 
 Run these from `apps/api/`:

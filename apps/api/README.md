@@ -30,6 +30,12 @@ pnpm --filter @aura/api dev
 
 The health check is available at `GET /health`. Swagger UI is available at `/docs`.
 
+## Architecture
+
+The FastAPI route modules in `app/api/routes/` handle HTTP inputs, authentication dependencies, status codes, and response schemas. They delegate application behavior to services in `app/services/`. Services apply user-scoped rules and call repositories in `app/repositories/` for persistence. Repositories contain SQLAlchemy queries and writes against models in `app/models/`.
+
+Database engine and session creation are isolated in `app/core/database.py`; environment-backed application settings are defined in `app/core/config.py`. Routes receive a database session through `get_db_session`, and service-level behavior can be exercised directly without an HTTP client.
+
 ## Memory API
 
 The memory API stores exact user text in PostgreSQL. Apply schema migrations before using it:

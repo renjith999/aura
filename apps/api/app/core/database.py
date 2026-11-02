@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
 
-database_url = settings.database_url or "sqlite:///./aura.db"
+database_url = settings.database_url.get_secret_value()
 engine_options = {"pool_pre_ping": True}
 if database_url.startswith("sqlite"):
     engine_options["connect_args"] = {"check_same_thread": False}

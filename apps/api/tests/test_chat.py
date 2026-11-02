@@ -41,4 +41,23 @@ def test_chat_openai_error() -> None:
         app.dependency_overrides.clear()
 
     assert response.status_code == 502
-    assert response.json() == {"detail": "Unable to generate an AI response."}
+    assert response.json() == {
+        "detail": "Unable to generate an AI response.",
+        "code": "upstream_error",
+    }
+
+
+def test_chat_is_unavailable_without_api_key(monkeypatch) -> None:
+    from pydantic import SecretStr
+
+    from app.api.routes.chat import settings
+
+    monkeypatch.setattr(settings, "openai_api_key", SecretStr(""))
+
+    response = client.post("/chat", json={"message": "Hello Aura"})
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "Chat is not configured.",
+        "code": "unavailable",
+    }

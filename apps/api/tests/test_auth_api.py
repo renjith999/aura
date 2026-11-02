@@ -126,6 +126,10 @@ def test_api_allows_the_configured_web_origin(auth_client):
     assert response.status_code == 200
     assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
 
+    actual_response = client.get("/health", headers={"Origin": "http://localhost:5173"})
+    assert actual_response.status_code == 200
+    assert actual_response.headers["access-control-expose-headers"] == "X-Request-ID"
+
 
 def test_second_user_cannot_read_update_or_delete_first_users_memory(auth_client):
     client, _ = auth_client

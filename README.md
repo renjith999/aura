@@ -28,7 +28,7 @@ packages/
 
 1. Copy `apps/api/.env.example` to `apps/api/.env` and set any local values you need.
 2. Install Python dependencies: `uv sync --project apps/api --group dev`.
-3. Create the configured PostgreSQL database and apply the schema: from `apps/api/`, run `uv run alembic upgrade head`.
+3. Start the local PostgreSQL service with `docker compose up -d postgres`, then apply the schema from `apps/api/` with `uv run alembic upgrade head`. The API example database URL matches the Compose credentials; update it if you use another database.
 4. Install JavaScript workspace dependencies: `pnpm install`.
 5. Start the supported API and web development servers: `pnpm dev`.
 
@@ -46,4 +46,4 @@ The FastAPI service runs at `http://localhost:8000`. Its health endpoint is `htt
 | `pnpm build`                                               | Build JavaScript workspaces                          |
 | `pnpm lint`                                                | Lint JavaScript workspaces                           |
 
-See [the architecture notes](docs/architecture.md) for the current backend direction and [the contribution guide](CONTRIBUTING.md) for repository conventions.
+See the [API guide](apps/api/README.md) for endpoint examples, authentication, error responses, and configuration; [the architecture notes](docs/architecture.md) for code boundaries and current decisions; and [the contribution guide](CONTRIBUTING.md) for repository conventions.

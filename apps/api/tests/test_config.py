@@ -41,7 +41,8 @@ def test_settings_reject_invalid_values(values) -> None:
         Settings(_env_file=None, **values)
 
 
-def test_production_requires_explicit_server_database_url() -> None:
+def test_production_requires_explicit_server_database_url(monkeypatch) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     with pytest.raises(
         ValidationError, match="DATABASE_URL must be explicitly configured"
     ):

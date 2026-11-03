@@ -20,6 +20,10 @@ class Settings(BaseSettings):
         repr=False,
     )
     access_token_ttl_seconds: int = Field(default=86400, gt=0, le=2_592_000)
+    chat_rate_limit_per_minute: int = Field(default=10, gt=0, le=1000)
+    chat_rate_limit_window_seconds: int = Field(default=60, gt=0, le=86_400)
+    chat_max_input_characters: int = Field(default=4000, gt=0, le=100_000)
+    chat_max_output_tokens: int = Field(default=1000, gt=0, le=8000)
     web_origin: str = "http://localhost:5173"
 
     model_config = SettingsConfigDict(

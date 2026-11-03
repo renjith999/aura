@@ -18,6 +18,7 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 logger = logging.getLogger("aura.api")
+logging.getLogger("httpx2").setLevel(logging.WARNING)
 
 app = FastAPI(title=settings.app_name, version=settings.app_version)
 app.add_middleware(
@@ -84,6 +85,7 @@ async def handle_http_error(
         404: "not_found",
         409: "conflict",
         422: "validation_error",
+        429: "rate_limited",
         502: "upstream_error",
         503: "unavailable",
     }

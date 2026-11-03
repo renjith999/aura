@@ -123,7 +123,7 @@ curl 'http://localhost:8000/memories?query=project&category=work&is_favorite=fal
 
 ### Chat
 
-`POST /chat` accepts `{"message":"..."}` and returns `{"response":"..."}`. It requires `OPENAI_API_KEY`; without the key it returns `503` with code `unavailable`. Provider failures return `502` with code `upstream_error`. The route currently does not require a bearer token, so keep it on a trusted network until access controls and usage limits are defined.
+`POST /chat` accepts `{"message":"..."}` (up to `CHAT_MAX_INPUT_CHARACTERS` characters, 4000 by default) and returns `{"response":"..."}`. It requires a valid `Authorization: Bearer <access-token>` header and `OPENAI_API_KEY`; missing or invalid authentication returns `401`, and a missing key returns `503` with code `unavailable`. Each user can make 10 requests per rolling 60-second window by default. The limit is stored as one usage-window row per user in PostgreSQL, so it is shared across API workers and survives restarts. When exceeded, the API returns `429` with code `rate_limited` and a `Retry-After` header. Configure the per-user request count and window with `CHAT_RATE_LIMIT_PER_MINUTE` and `CHAT_RATE_LIMIT_WINDOW_SECONDS`. Provider calls are capped at 1000 output tokens by default (`CHAT_MAX_OUTPUT_TOKENS`). Provider failures return `502` with code `upstream_error`.
 
 ## Errors and request IDs
 
@@ -133,35 +133,38 @@ Errors have a stable JSON shape and retain the `detail` field:
 { "detail": "Request validation failed.", "code": "validation_error" }
 ```
 
-| HTTP status | Code               | Typical cause                                        |
-| ----------- | ------------------ | ---------------------------------------------------- |
-| `401`       | `unauthorized`     | Missing, invalid, expired, or revoked bearer token   |
-| `404`       | `not_found`        | Resource does not exist or is not owned by this user |
-| `409`       | `conflict`         | An account already exists                            |
-| `422`       | `validation_error` | Invalid request body or query parameter              |
-| `500`       | `internal_error`   | Unexpected server failure                            |
-| `502`       | `upstream_error`   | Chat provider failure                                |
-| `503`       | `unavailable`      | Chat is not configured                               |
-
-Every response includes `X-Request-ID`. Request logs include the ID, method, path, status, and duration; unexpected errors also include the exception type. Request bodies, query strings, authorization headers, credentials, and note contents are not logged.
+| HTTP status                                                                                                                                                                                                                                                      | Code               | Typical cause                                        |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | ---------------------------------------------------- |
+| `401`                                                                                                                                                                                                                                                            | `unauthorized`     | Missing, invalid, expired, or revoked bearer token   |
+| `404`                                                                                                                                                                                                                                                            | `not_found`        | Resource does not exist or is not owned by this user |
+| `409`                                                                                                                                                                                                                                                            | `conflict`         | An account already exists                            |
+| `422`                                                                                                                                                                                                                                                            | `validation_error` | Invalid request body or query parameter              |
+| `429`                                                                                                                                                                                                                                                            | `rate_limited`     | Per-user chat request limit exceeded                 |
+| `500`                                                                                                                                                                                                                                                            | `internal_error`   | Unexpected server failure                            |
+| `502`                                                                                                                                                                                                                                                            | `upstream_error`   | Chat provider failure                                |
+| `503`                                                                                                                                                                                                                                                            | `unavailable`      | Chat is not configured                               |
+| Every response includes `X-Request-ID`. Request logs include the ID, method, path, status, and duration; unexpected errors also include the exception type. Request bodies, query strings, authorization headers, credentials, and note contents are not logged. |
 
 ## Runtime configuration
 
 Settings are loaded from environment variables or `apps/api/.env`; environment variables take precedence. The checked-in `apps/api/.env.example` is the local template.
 
-| Setting                    | Default                 | Notes                                    |
-| -------------------------- | ----------------------- | ---------------------------------------- |
-| `APP_NAME`                 | `Aura API`              | FastAPI title                            |
-| `APP_VERSION`              | `0.1.0`                 | API version shown in docs                |
-| `ENVIRONMENT`              | `development`           | `development`, `test`, or `production`   |
-| `API_PORT`                 | `8000`                  | Must be 1–65535                          |
-| `LOG_LEVEL`                | `INFO`                  | DEBUG, INFO, WARNING, ERROR, or CRITICAL |
-| `DATABASE_URL`             | Local PostgreSQL URL    | Must be a valid SQLAlchemy URL           |
-| `OPENAI_API_KEY`           | Empty                   | Optional unless `/chat` is used          |
-| `ACCESS_TOKEN_TTL_SECONDS` | `86400`                 | Must be 1–2592000                        |
-| `WEB_ORIGIN`               | `http://localhost:5173` | HTTP(S) browser origin allowed by CORS   |
-
-Production requires `ENVIRONMENT=production` and an explicitly configured server database URL; SQLite is rejected. The OpenAI key and database URL are held as redacted secret settings. Invalid settings fail during startup.
+| Setting                                                                                                                                                                                                                        | Default                 | Notes                                           |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------- | ----------------------------------------------- |
+| `APP_NAME`                                                                                                                                                                                                                     | `Aura API`              | FastAPI title                                   |
+| `APP_VERSION`                                                                                                                                                                                                                  | `0.1.0`                 | API version shown in docs                       |
+| `ENVIRONMENT`                                                                                                                                                                                                                  | `development`           | `development`, `test`, or `production`          |
+| `API_PORT`                                                                                                                                                                                                                     | `8000`                  | Must be 1–65535                                 |
+| `LOG_LEVEL`                                                                                                                                                                                                                    | `INFO`                  | DEBUG, INFO, WARNING, ERROR, or CRITICAL        |
+| `DATABASE_URL`                                                                                                                                                                                                                 | Local PostgreSQL URL    | Must be a valid SQLAlchemy URL                  |
+| `OPENAI_API_KEY`                                                                                                                                                                                                               | Empty                   | Optional unless `/chat` is used                 |
+| `ACCESS_TOKEN_TTL_SECONDS`                                                                                                                                                                                                     | `86400`                 | Must be 1–2592000                               |
+| `CHAT_RATE_LIMIT_PER_MINUTE`                                                                                                                                                                                                   | `10`                    | Requests allowed per user during the window     |
+| `CHAT_RATE_LIMIT_WINDOW_SECONDS`                                                                                                                                                                                               | `60`                    | Rolling usage window in seconds                 |
+| `CHAT_MAX_INPUT_CHARACTERS`                                                                                                                                                                                                    | `4000`                  | Maximum characters per chat message             |
+| `CHAT_MAX_OUTPUT_TOKENS`                                                                                                                                                                                                       | `1000`                  | Maximum provider output tokens per chat request |
+| `WEB_ORIGIN`                                                                                                                                                                                                                   | `http://localhost:5173` | HTTP(S) browser origin allowed by CORS          |
+| Production requires `ENVIRONMENT=production` and an explicitly configured server database URL; SQLite is rejected. The OpenAI key and database URL are held as redacted secret settings. Invalid settings fail during startup. |
 
 ## Architecture
 

@@ -1,13 +1,10 @@
-
-from sentence_transformers import SentenceTransformer
-from sentence_transformers.util import cos_sim
-
 from memory_store import load_memories
 
 
 MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
 
 model = None
+cos_sim = None
 
 _cached_memories = None
 _cached_embeddings = None
@@ -26,6 +23,8 @@ def _get_memory_embeddings(memories):
         return None
 
     if model is None:
+        from sentence_transformers import SentenceTransformer
+
         model = SentenceTransformer(MODEL_NAME)
 
     _cached_embeddings = model.encode(
@@ -40,6 +39,8 @@ def _get_memory_embeddings(memories):
 
 def semantic_search(query: str, top_k: int = 5) -> list[dict]:
     """Retrieve memories by semantic similarity."""
+    global cos_sim
+
     if not query or not query.strip() or top_k <= 0:
         return []
 
@@ -49,6 +50,14 @@ def semantic_search(query: str, top_k: int = 5) -> list[dict]:
         return []
 
     memory_embeddings = _get_memory_embeddings(memories)
+
+    if memory_embeddings is None:
+        return []
+
+    if cos_sim is None:
+        from sentence_transformers.util import cos_sim as similarity_function
+
+        cos_sim = similarity_function
 
     query_embedding = model.encode(
         query,

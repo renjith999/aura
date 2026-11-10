@@ -1,7 +1,80 @@
+
+import pytest
 import semantic_search
 
 
-def test_semantic_search_returns_relevant_memories(tmp_path, monkeypatch):
+class FakeTensor:
+    """Small stand-in for the tensor behaviour used by cos_sim."""
+
+    def __init__(self, values):
+        self.values = values
+
+    def __getitem__(self, index):
+        return FakeTensor(self.values[index])
+
+    def tolist(self):
+        return self.values
+
+
+class FakeModel:
+    """Deterministic embedding model for unit tests."""
+
+    def __init__(self):
+        self.memory_encoding_calls = 0
+
+    @staticmethod
+    def _vector(text):
+        text = text.lower()
+
+        if any(word in text for word in ("python", "fastapi", "technology",
+                                          "technologies", "framework",
+                                          "language")):
+            return [1.0, 0.0, 0.0, 0.0]
+
+        if "biryani" in text:
+            return [0.0, 1.0, 0.0, 0.0]
+
+        if "javascript" in text:
+            return [0.0, 0.0, 1.0, 0.0]
+
+        if "memory" in text or "memories" in text:
+            return [0.0, 0.0, 0.0, 1.0]
+
+        return [0.0, 0.0, 0.0, 0.0]
+
+    def encode(self, sentences, **kwargs):
+        if isinstance(sentences, list):
+            self.memory_encoding_calls += 1
+            return [self._vector(sentence) for sentence in sentences]
+
+        return self._vector(sentences)
+
+
+def fake_cos_sim(query_embedding, memory_embeddings):
+    scores = [
+        sum(a * b for a, b in zip(query_embedding, memory_embedding))
+        for memory_embedding in memory_embeddings
+    ]
+
+    return FakeTensor([scores])
+
+
+@pytest.fixture
+def fake_model(monkeypatch):
+    model = FakeModel()
+
+    monkeypatch.setattr(semantic_search, "model", model)
+    monkeypatch.setattr(semantic_search, "cos_sim", fake_cos_sim)
+    monkeypatch.setattr(semantic_search, "_cached_memories", None)
+    monkeypatch.setattr(semantic_search, "_cached_embeddings", None)
+
+    return model
+
+
+def test_semantic_search_returns_relevant_memories(
+    monkeypatch,
+    fake_model,
+):
     monkeypatch.setattr(
         semantic_search,
         "load_memories",
@@ -33,9 +106,7 @@ def test_semantic_search_returns_empty_for_blank_query():
     assert semantic_search.semantic_search("   ") == []
 
 
-def test_semantic_search_returns_empty_for_no_memories(
-    monkeypatch,
-):
+def test_semantic_search_returns_empty_for_no_memories(monkeypatch):
     monkeypatch.setattr(
         semantic_search,
         "load_memories",
@@ -45,7 +116,7 @@ def test_semantic_search_returns_empty_for_no_memories(
     assert semantic_search.semantic_search("What is Aura?") == []
 
 
-def test_semantic_search_respects_top_k(monkeypatch):
+def test_semantic_search_respects_top_k(monkeypatch, fake_model):
     monkeypatch.setattr(
         semantic_search,
         "load_memories",
@@ -64,86 +135,33 @@ def test_semantic_search_respects_top_k(monkeypatch):
     assert len(results) == 2
 
 
-def test_memory_embeddings_are_cached(monkeypatch):
-    import semantic_search
-
-    memories = [{"id": "mem-1", "content": "Aura uses Python and FastAPI"}]
+def test_memory_embeddings_are_cached(monkeypatch, fake_model):
+    memories = [
+        {"id": "mem-1", "content": "Aura uses Python and FastAPI"}
+    ]
 
     monkeypatch.setattr(
         semantic_search,
         "load_memories",
         lambda: memories,
     )
-    monkeypatch.setattr(
-        semantic_search,
-        "_cached_memories",
-        None,
-    )
-    monkeypatch.setattr(
-        semantic_search,
-        "_cached_embeddings",
-        None,
-    )
-
-    original_encode = semantic_search.model.encode
-    memory_encoding_calls = 0
-
-    def tracked_encode(sentences, **kwargs):
-        nonlocal memory_encoding_calls
-
-        if isinstance(sentences, list):
-            memory_encoding_calls += 1
-
-        return original_encode(sentences, **kwargs)
-
-    monkeypatch.setattr(
-        semantic_search.model,
-        "encode",
-        tracked_encode,
-    )
 
     semantic_search.semantic_search("What technology does Aura use?")
     semantic_search.semantic_search("Which framework does Aura use?")
 
-    assert memory_encoding_calls == 1
+    assert fake_model.memory_encoding_calls == 1
 
 
-def test_memory_embeddings_refresh_when_content_changes(monkeypatch):
-    import semantic_search
-
+def test_memory_embeddings_refresh_when_content_changes(
+    monkeypatch,
+    fake_model,
+):
     memories = [{"id": "mem-1", "content": "Aura uses Python"}]
 
     monkeypatch.setattr(
         semantic_search,
         "load_memories",
         lambda: memories,
-    )
-    monkeypatch.setattr(
-        semantic_search,
-        "_cached_memories",
-        None,
-    )
-    monkeypatch.setattr(
-        semantic_search,
-        "_cached_embeddings",
-        None,
-    )
-
-    original_encode = semantic_search.model.encode
-    memory_encoding_calls = 0
-
-    def tracked_encode(sentences, **kwargs):
-        nonlocal memory_encoding_calls
-
-        if isinstance(sentences, list):
-            memory_encoding_calls += 1
-
-        return original_encode(sentences, **kwargs)
-
-    monkeypatch.setattr(
-        semantic_search.model,
-        "encode",
-        tracked_encode,
     )
 
     semantic_search.semantic_search("What language does Aura use?")
@@ -152,4 +170,4 @@ def test_memory_embeddings_refresh_when_content_changes(monkeypatch):
 
     semantic_search.semantic_search("What language does Aura use?")
 
-    assert memory_encoding_calls == 2
+    assert fake_model.memory_encoding_calls == 2

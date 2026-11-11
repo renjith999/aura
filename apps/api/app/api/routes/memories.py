@@ -1,15 +1,34 @@
+import logging
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    HTTPException,
+    Query,
+    Response,
+    status,
+)
 from sqlalchemy.orm import Session
 
 from app.core.auth import CurrentUserId
 from app.core.database import get_db_session
 from app.schemas.memory import MemoryCreate, MemoryResponse, MemoryUpdate
+from app.services.memory_enrichment_service import MemoryEnrichmentService
 from app.services.memory_service import MemoryService
 
 router = APIRouter(prefix="/memories", tags=["Memories"])
 DbSession = Annotated[Session, Depends(get_db_session)]
+logger = logging.getLogger(__name__)
+
+
+async def enrich_memory_safely(content: str) -> None:
+    """Enrich a committed memory without letting provider errors escape."""
+    try:
+        await MemoryEnrichmentService().enrich(content)
+    except Exception:
+        logger.exception("Memory enrichment failed; original memory was retained.")
 
 
 @router.post("", response_model=MemoryResponse, status_code=status.HTTP_201_CREATED)
@@ -17,8 +36,10 @@ def create_memory(
     data: MemoryCreate,
     session: DbSession,
     user_id: CurrentUserId,
+    background_tasks: BackgroundTasks,
 ) -> MemoryResponse:
     memory = MemoryService(session).create(data, user_id)
+    background_tasks.add_task(enrich_memory_safely, memory.content)
     return MemoryResponse.model_validate(memory)
 
 

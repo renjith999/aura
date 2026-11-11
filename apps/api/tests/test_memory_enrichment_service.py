@@ -200,7 +200,7 @@ async def test_incomplete_response_is_checked_before_json_validation():
 def test_prompt_registry_returns_current_version_by_default():
     prompt = get_memory_enrichment_prompt()
 
-    assert prompt.version == "1.0.0"
+    assert prompt.version == "1.1.0"
     assert prompt.version == CURRENT_PROMPT_VERSION
     assert prompt.instructions
     assert "memory enrichment assistant" in prompt.instructions

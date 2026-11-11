@@ -30,6 +30,14 @@ def memory_client(tmp_path, monkeypatch):
     )
     identity = {"user_id": "user-1"}
 
+    class NoopEnrichmentService:
+        async def enrich(self, content):
+            return None
+
+    monkeypatch.setattr(
+        "app.api.routes.memories.MemoryEnrichmentService", NoopEnrichmentService
+    )
+
     def override_session():
         with test_session() as session:
             yield session
@@ -69,6 +77,48 @@ def test_create_and_retrieve_memory_preserves_text_and_timestamps(memory_client)
     retrieved = client.get(f"/memories/{data['id']}")
     assert retrieved.status_code == 200
     assert retrieved.json() == data
+
+
+def test_create_schedules_and_runs_enrichment_without_changing_memory(
+    memory_client, monkeypatch
+):
+    client, _ = memory_client
+    enriched_contents = []
+
+    class FakeEnrichmentService:
+        async def enrich(self, content):
+            enriched_contents.append(content)
+            return object()
+
+    monkeypatch.setattr(
+        "app.api.routes.memories.MemoryEnrichmentService", FakeEnrichmentService
+    )
+
+    response = create_memory(client)
+
+    assert response.status_code == 201
+    assert response.json()["content"] == "  Keep this text exactly.\n "
+    assert enriched_contents == ["  Keep this text exactly.\n "]
+
+
+def test_enrichment_failure_does_not_fail_memory_creation(memory_client, monkeypatch):
+    client, _ = memory_client
+
+    class FailingEnrichmentService:
+        async def enrich(self, content):
+            raise RuntimeError("provider unavailable")
+
+    monkeypatch.setattr(
+        "app.api.routes.memories.MemoryEnrichmentService", FailingEnrichmentService
+    )
+
+    response = create_memory(client)
+
+    assert response.status_code == 201
+    assert response.json()["content"] == "  Keep this text exactly.\n "
+    retrieved = client.get(f"/memories/{response.json()['id']}")
+    assert retrieved.status_code == 200
+    assert retrieved.json()["content"] == "  Keep this text exactly.\n "
 
 
 def test_list_supports_keyword_category_and_favorite_filters(memory_client):

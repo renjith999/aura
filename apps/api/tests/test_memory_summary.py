@@ -88,8 +88,8 @@ def test_summary_strips_leading_and_trailing_whitespace():
 # ---------------------------------------------------------
 
 
-def test_current_prompt_version_is_1_2_0():
-    assert CURRENT_PROMPT_VERSION == "1.2.0"
+def test_current_prompt_version_is_1_3_0():
+    assert CURRENT_PROMPT_VERSION == "1.3.0"
 
 
 def test_current_prompt_contains_summary_quality_rules():
@@ -118,9 +118,9 @@ def test_previous_prompt_version_remains_available():
 
 
 def test_new_prompt_version_is_available():
-    prompt = get_memory_enrichment_prompt("1.2.0")
+    prompt = get_memory_enrichment_prompt("1.3.0")
 
-    assert prompt.version == "1.2.0"
+    assert prompt.version == "1.3.0"
     assert prompt.instructions
 
 

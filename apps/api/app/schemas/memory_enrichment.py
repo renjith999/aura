@@ -1,4 +1,6 @@
 from enum import Enum
+import re
+import unicodedata
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -83,15 +85,30 @@ class MemoryEnrichmentV1(BaseModel):
         seen = set()
 
         for value in values:
-            tag = value.strip()
+            tag = unicodedata.normalize("NFKC", value).strip().casefold()
+
+            # Preserve Unicode letters, numbers, and combining marks.
+            # Convert all other characters into separators.
+            characters = []
+
+            for char in tag:
+                category = unicodedata.category(char)
+
+                if category[0] in {"L", "N", "M"}:
+                    characters.append(char)
+                else:
+                    characters.append("-")
+
+            tag = "".join(characters)
+
+            # Collapse repeated separators and remove edge hyphens.
+            tag = re.sub(r"-+", "-", tag).strip("-")
 
             if not tag:
                 continue
 
-            key = tag.casefold()
-
-            if key not in seen:
-                seen.add(key)
+            if tag not in seen:
+                seen.add(tag)
                 normalized.append(tag)
 
         return normalized

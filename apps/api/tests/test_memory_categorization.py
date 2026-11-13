@@ -109,14 +109,17 @@ def test_enrichment_accepts_null_memory_type_when_ambiguous():
     assert result.memory_type is None
 
 
-def test_current_prompt_version_is_1_3_0():
-    assert CURRENT_PROMPT_VERSION == "1.3.0"
-    assert get_memory_enrichment_prompt().version == "1.3.0"
+def test_current_prompt_version_is_1_4_0():
+    assert CURRENT_PROMPT_VERSION == "1.4.0"
+    assert get_memory_enrichment_prompt().version == "1.4.0"
 
 
 def test_previous_prompt_versions_remain_available():
     assert get_memory_enrichment_prompt("1.0.0").version == "1.0.0"
     assert get_memory_enrichment_prompt("1.1.0").version == "1.1.0"
+    assert get_memory_enrichment_prompt("1.2.0").version == "1.2.0"
+    assert get_memory_enrichment_prompt("1.3.0").version == "1.3.0"
+    assert get_memory_enrichment_prompt("1.4.0").version == "1.4.0"
 
 
 def test_current_prompt_contains_category_rules():

@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from app.prompts.memory_enrichment import v1, v1_1, v1_2, v1_3
+from app.prompts.memory_enrichment import v1, v1_1, v1_2, v1_3, v1_4
 
 
 @dataclass(frozen=True)
@@ -9,14 +9,14 @@ class PromptDefinition:
     instructions: str
 
 
-CURRENT_PROMPT_VERSION = v1_3.PROMPT_VERSION
+CURRENT_PROMPT_VERSION = v1_4.PROMPT_VERSION
 
 _PROMPTS = {
     prompt.PROMPT_VERSION: PromptDefinition(
         version=prompt.PROMPT_VERSION,
         instructions=prompt.INSTRUCTIONS,
     )
-    for prompt in (v1, v1_1, v1_2, v1_3)
+    for prompt in (v1, v1_1, v1_2, v1_3, v1_4)
 }
 
 

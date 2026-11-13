@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.models.memory import Memory
 from app.schemas.memory import MemoryCreate, MemoryUpdate
+from app.models.memory_enrichment import MemoryEnrichment
 
 
 class MemoryRepository:
@@ -46,15 +47,41 @@ class MemoryRepository:
         )
         return self.session.scalar(statement)
 
+
     def update(self, memory: Memory, data: MemoryUpdate) -> Memory:
         from app.models.memory import utc_now
 
-        for field, value in data.model_dump(exclude_unset=True).items():
-            setattr(memory, field, value)
-        memory.updated_at = utc_now()
-        self.session.commit()
-        self.session.refresh(memory)
-        return memory
+        update_data = data.model_dump(exclude_unset=True)
+
+        content_changed = (
+            "content" in update_data
+            and update_data["content"] != memory.content
+        )
+
+        try:
+            if content_changed:
+                enrichment = self.session.get(
+                    MemoryEnrichment,
+                    memory.id,
+                )
+
+                if enrichment is not None:
+                    self.session.delete(enrichment)
+
+            for field, value in update_data.items():
+                setattr(memory, field, value)
+
+            memory.updated_at = utc_now()
+
+            self.session.commit()
+            self.session.refresh(memory)
+
+            return memory
+
+        except Exception:
+            self.session.rollback()
+            raise
+
 
     def delete(self, memory: Memory) -> None:
         self.session.delete(memory)

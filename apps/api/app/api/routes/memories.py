@@ -17,19 +17,56 @@ from app.core.database import get_db_session
 from app.schemas.memory import MemoryCreate, MemoryResponse, MemoryUpdate
 from app.services.memory_enrichment_service import MemoryEnrichmentService
 from app.services.memory_service import MemoryService
+import hashlib
+
+from app.core.database import SessionLocal
+from app.repositories.memory_enrichment_repository import (
+    MemoryEnrichmentRepository,
+)
 
 router = APIRouter(prefix="/memories", tags=["Memories"])
 DbSession = Annotated[Session, Depends(get_db_session)]
 logger = logging.getLogger(__name__)
 
 
-async def enrich_memory_safely(content: str) -> None:
-    """Enrich a committed memory without letting provider errors escape."""
-    try:
-        await MemoryEnrichmentService().enrich(content)
-    except Exception:
-        logger.exception("Memory enrichment failed; original memory was retained.")
+async def enrich_memory_safely(
+    memory_id: str,
+    content: str,
+) -> None:
+    """Generate and persist enrichment without affecting the original memory."""
 
+    try:
+        source_content_hash = hashlib.sha256(
+            content.encode("utf-8")
+        ).hexdigest()
+
+        result = await MemoryEnrichmentService().enrich_with_metadata(content)
+
+        with SessionLocal() as session:
+            repository = MemoryEnrichmentRepository(session)
+
+            saved = repository.save_if_memory_unchanged(
+                memory_id=memory_id,
+                source_content_hash=source_content_hash,
+                enrichment=result.enrichment,
+                schema_version=result.schema_version,
+                prompt_version=result.prompt_version,
+                model=result.model,
+            )
+
+            if not saved:
+                logger.info(
+                    "Skipped enrichment persistence for memory %s: "
+                    "memory was deleted or its content changed.",
+                    memory_id,
+                )
+
+    except Exception:
+        logger.exception(
+            "Memory enrichment failed for memory %s; "
+            "original memory was retained.",
+            memory_id,
+        )
 
 @router.post("", response_model=MemoryResponse, status_code=status.HTTP_201_CREATED)
 def create_memory(
@@ -39,7 +76,11 @@ def create_memory(
     background_tasks: BackgroundTasks,
 ) -> MemoryResponse:
     memory = MemoryService(session).create(data, user_id)
-    background_tasks.add_task(enrich_memory_safely, memory.content)
+    background_tasks.add_task(
+        enrich_memory_safely,
+        memory.id,
+        memory.content,
+    )
     return MemoryResponse.model_validate(memory)
 
 

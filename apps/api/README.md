@@ -170,7 +170,76 @@ Settings are loaded from environment variables or `apps/api/.env`; environment v
 
 Routes in `app/api/routes/` handle HTTP input, authentication dependencies, status codes, and response schemas. Authentication and memory routes delegate to services in `app/services/`; services apply application rules and call SQLAlchemy repositories in `app/repositories/`. Models in `app/models/` map to PostgreSQL tables. Request and response models live in `app/schemas/`. Database engine and session creation are in `app/core/database.py`; settings and bearer-token validation are in `app/core/`.
 
+Database engine and session creation are isolated in `app/core/database.py`; environment-backed application settings are defined in `app/core/config.py`. Routes receive a database session through `get_db_session`, and service-level behavior can be exercised directly without an HTTP client.
+
+## Memory API
+
+The memory API stores exact user text in PostgreSQL. Apply schema migrations before using it:
+
+```bash
+cd apps/api
+uv run alembic upgrade head
+```
+
+Create an account and sign in through `/auth/register` and `/auth/login`. Passwords are stored as salted PBKDF2-SHA256 hashes. Sign-in returns a random opaque bearer token; only its SHA-256 hash is stored in PostgreSQL. Tokens expire after `ACCESS_TOKEN_TTL_SECONDS` (default `86400`); `POST /auth/logout` revokes the current token. Clients send the token in the `Authorization: Bearer <access-token>` header. No signing secret is needed because tokens are random and validated against the database.
+
+For the local React client, `WEB_ORIGIN` sets the allowed browser origin and defaults to `http://localhost:5173`. The client API URL can be set with `VITE_API_URL`.
+
+The memory routes require a valid bearer token and scope each read, update, and delete to the signed-in user. The API supports:
+
+| Method   | Path                    | Behavior                                                                                  |
+| -------- | ----------------------- | ----------------------------------------------------------------------------------------- |
+| `POST`   | `/memories`             | Create a memory; returns `201`                                                            |
+| `GET`    | `/memories`             | List memories; optional `query`, `category`, `is_favorite`, `limit`, and `offset` filters |
+| `GET`    | `/memories/{memory_id}` | Retrieve one owned memory                                                                 |
+| `GET`    | `/memories/{memory_id}/enrichment` | Retrieve enrichment status and retry details                                     |
+| `PATCH`  | `/memories/{memory_id}` | Update title, content, category, or favorite status                                       |
+| `DELETE` | `/memories/{memory_id}` | Delete one owned memory; returns `204`                                                    |
+
+Example create request (after authentication is connected):
+
+```bash
+curl -X POST http://localhost:8000/memories \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <access-token>' \
+  -d '{"title":"Project note","content":"Remember this exactly.","category":"work","is_favorite":false}'
+```
+
+Register example:
+
+```bash
+curl -X POST http://localhost:8000/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"you@example.com","password":"a-long-unique-passphrase"}'
+```
+
+List/search example: `GET /memories?query=project&category=work&is_favorite=false`. Search is a deterministic case-insensitive text match across title and content; results are ordered by newest creation time, then stable ID. Unknown and non-owned IDs return the same `404` response.
 The memory API stores the submitted text as-is and uses deterministic case-insensitive keyword matching across title and content. It does not currently use embeddings, semantic search, or RAG. See [the architecture notes](../../docs/architecture.md) for the system diagram, storage choices, and open operational decisions.
+
+## Memory enrichment worker
+
+Apply migrations before starting the API so the enrichment status and lease columns are
+available:
+
+```bash
+cd apps/api
+uv run alembic upgrade head
+uv run uvicorn app.main:app --reload --port 8000
+```
+
+The polling worker starts automatically in the FastAPI lifespan; it does not need a
+separate command. It polls `memory_enrichments` every second for pending jobs, due
+retries, and expired processing leases. Each API process may run a worker because the
+database claim is atomic. A job has at most three application-level attempts, with
+jittered delays around 5 seconds and 30 seconds. The OpenAI request timeout is 40
+seconds, and SDK-level automatic retries are disabled so the persisted attempt count
+remains the retry limit. Refusals and invalid enrichment output fail without retry;
+transient provider and network errors can be retried.
+
+New memories and content edits queue enrichment without changing the original content.
+Use `GET /memories/{memory_id}/enrichment` to read `pending`, `processing`,
+`completed`, or `failed`, along with `attempt_count`, `last_error`, and
+`next_retry_at`. Existing enrichment rows are migrated as completed.
 
 ## Python checks
 

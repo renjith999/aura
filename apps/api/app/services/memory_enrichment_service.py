@@ -1,8 +1,14 @@
-
 from dataclasses import dataclass
 from typing import Any
 
-from openai import AsyncOpenAI, OpenAIError
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    AsyncOpenAI,
+    OpenAIError,
+    RateLimitError,
+)
 from pydantic import ValidationError
 
 from app.core.config import settings
@@ -10,7 +16,6 @@ from app.prompts.memory_enrichment.registry import (
     get_memory_enrichment_prompt,
 )
 from app.schemas.memory_enrichment import MemoryEnrichmentV1
-
 
 MEMORY_ENRICHMENT_SCHEMA_VERSION = "1.0.0"
 
@@ -42,13 +47,19 @@ class MemoryEnrichmentValidationError(MemoryEnrichmentError):
 class MemoryEnrichmentProviderError(MemoryEnrichmentError):
     """Raised when the OpenAI request fails."""
 
+    def __init__(self, message: str, retryable: bool = False) -> None:
+        super().__init__(message)
+        self.retryable = retryable
+
 
 class MemoryEnrichmentService:
     MODEL = "gpt-5-mini"
 
     def __init__(self, client: AsyncOpenAI | None = None) -> None:
         self.client: Any = client or AsyncOpenAI(
-            api_key=settings.openai_api_key
+            api_key=settings.openai_api_key,
+            timeout=40.0,
+            max_retries=0,
         )
 
     async def enrich(
@@ -85,7 +96,8 @@ class MemoryEnrichmentService:
             )
         except OpenAIError as exc:
             raise MemoryEnrichmentProviderError(
-                "OpenAI enrichment request failed."
+                "OpenAI enrichment request failed.",
+                retryable=self._is_retryable_provider_error(exc),
             ) from exc
 
         if response.status == "incomplete":
@@ -95,7 +107,8 @@ class MemoryEnrichmentService:
 
         if response.status != "completed":
             raise MemoryEnrichmentProviderError(
-                f"OpenAI response did not complete. Status: {response.status}"
+                f"OpenAI response did not complete. Status: {response.status}",
+                retryable=True,
             )
 
         if self._has_refusal(response):
@@ -127,3 +140,15 @@ class MemoryEnrichmentService:
                     return True
 
         return False
+
+    @staticmethod
+    def _is_retryable_provider_error(error: OpenAIError) -> bool:
+        if isinstance(error, (APIConnectionError, APITimeoutError, RateLimitError)):
+            return True
+
+        if isinstance(error, APIStatusError):
+            return error.status_code in {408, 409, 429} or error.status_code >= 500
+
+        # SDK errors without a status code are treated as transient, but remain
+        # bounded by the application-level attempt limit.
+        return getattr(error, "status_code", None) is None

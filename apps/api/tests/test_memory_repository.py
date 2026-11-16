@@ -1,14 +1,15 @@
 
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session
+import hashlib
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session
 
 from app.models.base import Base
 from app.models.memory import Memory
 from app.models.memory_enrichment import MemoryEnrichment
 from app.repositories.memory_repository import MemoryRepository
-from app.schemas.memory import MemoryCreate, MemoryUpdate
+from app.schemas.memory import MemoryUpdate
 
 
 @pytest.fixture
@@ -64,7 +65,7 @@ def create_test_enrichment(
     return enrichment
 
 
-def test_content_update_deletes_existing_enrichment(repository_session):
+def test_content_update_resets_existing_enrichment_to_pending(repository_session):
     session = repository_session
     memory = create_test_memory(session)
     create_test_enrichment(session, memory.id)
@@ -79,7 +80,14 @@ def test_content_update_deletes_existing_enrichment(repository_session):
     assert updated.content == "Updated content"
 
     enrichment = session.get(MemoryEnrichment, memory.id)
-    assert enrichment is None
+    assert enrichment is not None
+    assert enrichment.status == "pending"
+    assert enrichment.attempt_count == 0
+    assert enrichment.summary is None
+    assert enrichment.tags == []
+    assert enrichment.source_content_hash == hashlib.sha256(
+        b"Updated content"
+    ).hexdigest()
 
 
 def test_title_update_preserves_existing_enrichment(repository_session):

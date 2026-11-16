@@ -2,6 +2,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.models.base import Base
+from app.models.memory_enrichment import MemoryEnrichment
 from app.schemas.memory import MemoryCreate, MemoryUpdate
 from app.services.memory_service import MemoryService
 
@@ -24,6 +25,11 @@ def test_memory_service_uses_repository_without_http(tmp_path) -> None:
             assert service.get_for_user(created.id, "user-1") == created
             assert service.list_for_user("user-1") == [created]
             assert service.get_for_user(created.id, "user-2") is None
+
+            enrichment = session.get(MemoryEnrichment, created.id)
+            assert enrichment is not None
+            assert enrichment.status == "pending"
+            assert enrichment.attempt_count == 0
 
             updated = service.update_for_user(
                 created.id,

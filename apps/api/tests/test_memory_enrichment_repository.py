@@ -274,6 +274,30 @@ def test_pending_enrichment_can_be_claimed_only_once(enrichment_session):
     assert record.lease_expires_at is not None
 
 
+def test_pending_record_at_attempt_limit_is_not_claimed(enrichment_session):
+    session = enrichment_session
+    memory = create_memory(session)
+    record = MemoryEnrichment(
+        memory_id=memory.id,
+        summary=None,
+        category=None,
+        memory_type=None,
+        tags=[],
+        entities=[],
+        importance=None,
+        schema_version="1.0.0",
+        prompt_version="1.4.0",
+        model="gpt-5-mini",
+        source_content_hash=content_hash(memory.content),
+        status="pending",
+        attempt_count=MAX_ATTEMPTS,
+    )
+    session.add(record)
+    session.commit()
+
+    assert MemoryEnrichmentRepository(session).claim(memory.id) is None
+
+
 def test_expired_worker_lease_can_be_reclaimed(enrichment_session):
     session = enrichment_session
     memory = create_memory(session)

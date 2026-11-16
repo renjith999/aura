@@ -26,8 +26,12 @@ async def process_memory_enrichment(
     service_factory: Callable[[], MemoryEnrichmentService] | None = None,
 ) -> bool:
     """Claim and process one pending or retryable enrichment job."""
-    with SessionLocal() as session:
-        claim = MemoryEnrichmentRepository(session).claim(memory_id)
+    try:
+        with SessionLocal() as session:
+            claim = MemoryEnrichmentRepository(session).claim(memory_id)
+    except Exception:
+        logger.exception("Could not claim enrichment work for %s.", memory_id)
+        return False
 
     if claim is None:
         return False
@@ -57,11 +61,17 @@ async def process_memory_enrichment(
         if not saved:
             logger.info("Discarded stale enrichment for memory %s.", claim.memory_id)
     except Exception as exc:
-        _mark_failed(
-            claim,
-            type(exc).__name__,
-            retryable=_is_retryable(exc),
-        )
+        try:
+            _mark_failed(
+                claim,
+                type(exc).__name__,
+                retryable=_is_retryable(exc),
+            )
+        except Exception:
+            logger.exception(
+                "Could not persist failure for memory %s; its lease will expire.",
+                claim.memory_id,
+            )
         logger.exception(
             "Memory enrichment attempt %s failed for memory %s.",
             claim.attempt_count,

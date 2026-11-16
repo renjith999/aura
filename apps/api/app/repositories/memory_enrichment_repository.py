@@ -79,7 +79,10 @@ class MemoryEnrichmentRepository:
     ) -> EnrichmentClaim | None:
         now = now or datetime.now(UTC)
         eligible = or_(
-            MemoryEnrichment.status == PENDING,
+            and_(
+                MemoryEnrichment.status == PENDING,
+                MemoryEnrichment.attempt_count < MAX_ATTEMPTS,
+            ),
             and_(
                 MemoryEnrichment.status == FAILED,
                 MemoryEnrichment.next_retry_at.is_not(None),

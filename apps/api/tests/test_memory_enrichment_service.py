@@ -1,10 +1,15 @@
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from openai import OpenAIError
 
+from app.core.config import settings
+from app.prompts.memory_enrichment.registry import (
+    CURRENT_PROMPT_VERSION,
+    get_memory_enrichment_prompt,
+)
 from app.schemas.memory_enrichment import MemoryEnrichmentV1
 from app.services.memory_enrichment_service import (
     MemoryEnrichmentIncompleteError,
@@ -13,16 +18,30 @@ from app.services.memory_enrichment_service import (
     MemoryEnrichmentService,
     MemoryEnrichmentValidationError,
 )
-from app.prompts.memory_enrichment.registry import (
-    CURRENT_PROMPT_VERSION,
-    get_memory_enrichment_prompt,
-)
+
 
 def create_test_service():
     client = SimpleNamespace(
         responses=SimpleNamespace(create=AsyncMock()),
     )
     return MemoryEnrichmentService(client=client)
+
+
+def test_default_client_uses_approved_timeout_and_application_retries(
+    monkeypatch,
+):
+    constructor = Mock()
+    monkeypatch.setattr(
+        "app.services.memory_enrichment_service.AsyncOpenAI",
+        constructor,
+    )
+    MemoryEnrichmentService()
+
+    constructor.assert_called_once_with(
+        api_key=settings.openai_api_key,
+        timeout=40.0,
+        max_retries=0,
+    )
 
 
 def create_enrichment():
@@ -179,8 +198,10 @@ async def test_enrich_handles_unexpected_response_status():
     with pytest.raises(
         MemoryEnrichmentProviderError,
         match="did not complete",
-    ):
+    ) as error:
         await service.enrich("Some memory content")
+
+    assert error.value.retryable is True
 
 
 @pytest.mark.asyncio

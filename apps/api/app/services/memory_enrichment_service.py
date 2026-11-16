@@ -58,7 +58,7 @@ class MemoryEnrichmentService:
     def __init__(self, client: AsyncOpenAI | None = None) -> None:
         self.client: Any = client or AsyncOpenAI(
             api_key=settings.openai_api_key,
-            timeout=45.0,
+            timeout=40.0,
             max_retries=0,
         )
 
@@ -107,7 +107,8 @@ class MemoryEnrichmentService:
 
         if response.status != "completed":
             raise MemoryEnrichmentProviderError(
-                f"OpenAI response did not complete. Status: {response.status}"
+                f"OpenAI response did not complete. Status: {response.status}",
+                retryable=True,
             )
 
         if self._has_refusal(response):

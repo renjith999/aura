@@ -56,6 +56,7 @@ The memory routes require a valid bearer token and scope each read, update, and 
 | `POST`   | `/memories`             | Create a memory; returns `201`                                                            |
 | `GET`    | `/memories`             | List memories; optional `query`, `category`, `is_favorite`, `limit`, and `offset` filters |
 | `GET`    | `/memories/{memory_id}` | Retrieve one owned memory                                                                 |
+| `GET`    | `/memories/{memory_id}/enrichment` | Retrieve enrichment status and retry details                                     |
 | `PATCH`  | `/memories/{memory_id}` | Update title, content, category, or favorite status                                       |
 | `DELETE` | `/memories/{memory_id}` | Delete one owned memory; returns `204`                                                    |
 
@@ -77,6 +78,31 @@ curl -X POST http://localhost:8000/auth/register \
 ```
 
 List/search example: `GET /memories?query=project&category=work&is_favorite=false`. Search is a deterministic case-insensitive text match across title and content; results are ordered by newest creation time, then stable ID. Unknown and non-owned IDs return the same `404` response.
+
+## Memory enrichment worker
+
+Apply migrations before starting the API so the enrichment status and lease columns are
+available:
+
+```bash
+cd apps/api
+uv run alembic upgrade head
+uv run uvicorn app.main:app --reload --port 8000
+```
+
+The polling worker starts automatically in the FastAPI lifespan; it does not need a
+separate command. It polls `memory_enrichments` every second for pending jobs, due
+retries, and expired processing leases. Each API process may run a worker because the
+database claim is atomic. A job has at most three application-level attempts, with
+jittered delays around 5 seconds and 30 seconds. The OpenAI request timeout is 40
+seconds, and SDK-level automatic retries are disabled so the persisted attempt count
+remains the retry limit. Refusals and invalid enrichment output fail without retry;
+transient provider and network errors can be retried.
+
+New memories and content edits queue enrichment without changing the original content.
+Use `GET /memories/{memory_id}/enrichment` to read `pending`, `processing`,
+`completed`, or `failed`, along with `attempt_count`, `last_error`, and
+`next_retry_at`. Existing enrichment rows are migrated as completed.
 
 ## Python checks
 

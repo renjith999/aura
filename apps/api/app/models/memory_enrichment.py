@@ -1,7 +1,16 @@
 
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import (
+    JSON,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -14,6 +23,16 @@ def utc_now() -> datetime:
 
 class MemoryEnrichment(Base):
     __tablename__ = "memory_enrichments"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('pending', 'processing', 'completed', 'failed')",
+            name="ck_memory_enrichments_status",
+        ),
+        CheckConstraint(
+            "attempt_count >= 0",
+            name="ck_memory_enrichments_attempt_count",
+        ),
+    )
 
     memory_id: Mapped[str] = mapped_column(
         String(36),
@@ -51,6 +70,29 @@ class MemoryEnrichment(Base):
 
     source_content_hash: Mapped[str] = mapped_column(
         String(64), nullable=False
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="completed",
+        server_default=text("'completed'"),
+    )
+    attempt_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default=text("0"),
+    )
+    last_error: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    next_retry_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    lease_expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
     created_at: Mapped[datetime] = mapped_column(

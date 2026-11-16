@@ -1,6 +1,8 @@
-from enum import Enum
 import re
 import unicodedata
+from datetime import datetime
+from enum import Enum
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -130,3 +132,12 @@ class MemoryEnrichmentV1(BaseModel):
                 normalized.append(entity)
 
         return normalized
+
+
+class MemoryEnrichmentStatusResponse(BaseModel):
+    memory_id: str
+    status: Literal["pending", "processing", "completed", "failed"]
+    attempt_count: int
+    last_error: str | None
+    next_retry_at: datetime | None
+    completed_at: datetime | None

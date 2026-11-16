@@ -1,4 +1,5 @@
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,10 +11,11 @@ from app.core.security import utc_now
 from app.main import app
 from app.models.base import Base
 from app.models.user import User, UserSession
+from app.schemas.memory_enrichment import MemoryEnrichmentV1
 
 
 @pytest.fixture
-def auth_client(tmp_path):
+def auth_client(tmp_path, monkeypatch):
     test_engine = create_engine(
         f"sqlite:///{tmp_path / 'auth.db'}",
         connect_args={"check_same_thread": False},
@@ -23,6 +25,35 @@ def auth_client(tmp_path):
         bind=test_engine,
         autoflush=False,
         expire_on_commit=False,
+    )
+
+    class FakeEnrichmentService:
+        async def enrich_with_metadata(self, content):
+            return SimpleNamespace(
+                enrichment=MemoryEnrichmentV1(
+                    summary="Test summary",
+                    category=None,
+                    memory_type=None,
+                    tags=[],
+                    entities=[],
+                    importance=None,
+                ),
+                schema_version="1.0.0",
+                prompt_version="1.4.0",
+                model="gpt-5-mini",
+            )
+
+    monkeypatch.setattr(
+        "app.api.routes.memories.MemoryEnrichmentService",
+        FakeEnrichmentService,
+    )
+    monkeypatch.setattr(
+        "app.services.memory_enrichment_tasks.SessionLocal",
+        test_session,
+    )
+    monkeypatch.setattr(
+        "app.services.memory_enrichment_tasks.POLL_INTERVAL_SECONDS",
+        3600.0,
     )
 
     def override_session():

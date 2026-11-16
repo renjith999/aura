@@ -2,17 +2,35 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.memory import Memory
-from app.schemas.memory import MemoryCreate, MemoryUpdate
 from app.models.memory_enrichment import MemoryEnrichment
+from app.repositories.memory_enrichment_repository import (
+    MemoryEnrichmentRepository,
+)
+from app.schemas.memory import MemoryCreate, MemoryUpdate
 
 
 class MemoryRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
 
-    def create(self, data: MemoryCreate, user_id: str) -> Memory:
+    def create(
+        self,
+        data: MemoryCreate,
+        user_id: str,
+        schema_version: str,
+        prompt_version: str,
+        model: str,
+    ) -> Memory:
         memory = Memory(**data.model_dump(), user_id=user_id)
         self.session.add(memory)
+        self.session.flush()
+        MemoryEnrichmentRepository(self.session).create_or_reset_pending(
+            memory_id=memory.id,
+            content=memory.content,
+            schema_version=schema_version,
+            prompt_version=prompt_version,
+            model=model,
+        )
         self.session.commit()
         self.session.refresh(memory)
         return memory
@@ -48,7 +66,14 @@ class MemoryRepository:
         return self.session.scalar(statement)
 
 
-    def update(self, memory: Memory, data: MemoryUpdate) -> Memory:
+    def update(
+        self,
+        memory: Memory,
+        data: MemoryUpdate,
+        schema_version: str | None = None,
+        prompt_version: str | None = None,
+        model: str | None = None,
+    ) -> Memory:
         from app.models.memory import utc_now
 
         update_data = data.model_dump(exclude_unset=True)
@@ -66,7 +91,25 @@ class MemoryRepository:
                 )
 
                 if enrichment is not None:
-                    self.session.delete(enrichment)
+                    MemoryEnrichmentRepository(self.session).create_or_reset_pending(
+                        memory_id=memory.id,
+                        content=update_data["content"],
+                        schema_version=schema_version or enrichment.schema_version,
+                        prompt_version=prompt_version or enrichment.prompt_version,
+                        model=model or enrichment.model,
+                    )
+                elif (
+                    schema_version is not None
+                    and prompt_version is not None
+                    and model is not None
+                ):
+                    MemoryEnrichmentRepository(self.session).create_or_reset_pending(
+                        memory_id=memory.id,
+                        content=update_data["content"],
+                        schema_version=schema_version,
+                        prompt_version=prompt_version,
+                        model=model,
+                    )
 
             for field, value in update_data.items():
                 setattr(memory, field, value)

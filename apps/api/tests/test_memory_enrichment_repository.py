@@ -1,5 +1,6 @@
 
 import hashlib
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import create_engine, select
@@ -9,6 +10,8 @@ from app.models.base import Base
 from app.models.memory import Memory
 from app.models.memory_enrichment import MemoryEnrichment
 from app.repositories.memory_enrichment_repository import (
+    LEASE_SECONDS,
+    MAX_ATTEMPTS,
     MemoryEnrichmentRepository,
 )
 from app.schemas.memory_enrichment import (
@@ -242,3 +245,111 @@ def test_persists_enrichment_metadata_and_entity_values(enrichment_session):
         and isinstance(entity["entity_type"], str)
         for entity in record.entities
     )
+
+
+def test_pending_enrichment_can_be_claimed_only_once(enrichment_session):
+    session = enrichment_session
+    memory = create_memory(session)
+    repository = MemoryEnrichmentRepository(session)
+    repository.create_or_reset_pending(
+        memory.id,
+        memory.content,
+        schema_version="1.0.0",
+        prompt_version="1.4.0",
+        model="gpt-5-mini",
+    )
+    session.commit()
+
+    now = datetime.now(UTC)
+    claim = repository.claim(memory.id, now=now)
+
+    assert claim is not None
+    assert claim.memory_id == memory.id
+    assert claim.attempt_count == 1
+    assert repository.claim(memory.id, now=now) is None
+
+    record = session.get(MemoryEnrichment, memory.id)
+    assert record is not None
+    assert record.status == "processing"
+    assert record.lease_expires_at is not None
+
+
+def test_expired_worker_lease_can_be_reclaimed(enrichment_session):
+    session = enrichment_session
+    memory = create_memory(session)
+    repository = MemoryEnrichmentRepository(session)
+    repository.create_or_reset_pending(
+        memory.id,
+        memory.content,
+        schema_version="1.0.0",
+        prompt_version="1.4.0",
+        model="gpt-5-mini",
+    )
+    session.commit()
+
+    now = datetime.now(UTC)
+    first_claim = repository.claim(memory.id, now=now)
+    assert first_claim is not None
+
+    recovered_claim = repository.claim(
+        memory.id,
+        now=now + timedelta(seconds=LEASE_SECONDS + 1),
+    )
+
+    assert recovered_claim is not None
+    assert recovered_claim.attempt_count == 2
+
+
+def test_retry_schedule_is_bounded_and_exhausts_after_max_attempts(
+    enrichment_session,
+):
+    session = enrichment_session
+    memory = create_memory(session)
+    repository = MemoryEnrichmentRepository(session)
+    repository.create_or_reset_pending(
+        memory.id,
+        memory.content,
+        schema_version="1.0.0",
+        prompt_version="1.4.0",
+        model="gpt-5-mini",
+    )
+    session.commit()
+
+    now = datetime.now(UTC)
+    for expected_attempt, retry_delay in ((1, (4, 6)), (2, (24, 36))):
+        claim = repository.claim(memory.id, now=now)
+        assert claim is not None
+        assert claim.attempt_count == expected_attempt
+        assert repository.fail(
+            claim,
+            error_code="provider_error",
+            retryable=True,
+            now=now,
+        )
+
+        record = session.get(MemoryEnrichment, memory.id)
+        assert record is not None
+        assert record.status == "failed"
+        assert record.next_retry_at is not None
+        scheduled_at = record.next_retry_at
+        if scheduled_at.tzinfo is None:
+            scheduled_at = scheduled_at.replace(tzinfo=UTC)
+        scheduled_delay = (scheduled_at - now).total_seconds()
+        assert retry_delay[0] <= scheduled_delay <= retry_delay[1]
+        now = scheduled_at + timedelta(seconds=1)
+
+    final_claim = repository.claim(memory.id, now=now)
+    assert final_claim is not None
+    assert final_claim.attempt_count == MAX_ATTEMPTS
+    assert repository.fail(
+        final_claim,
+        error_code="provider_error",
+        retryable=True,
+        now=now,
+    )
+
+    record = session.get(MemoryEnrichment, memory.id)
+    assert record is not None
+    assert record.status == "failed"
+    assert record.next_retry_at is None
+    assert repository.claim(memory.id, now=now + timedelta(days=1)) is None

@@ -70,8 +70,12 @@ def memory_client(tmp_path, monkeypatch):
     # Background enrichment must use the test database,
     # not the application's configured database.
     monkeypatch.setattr(
-        "app.api.routes.memories.SessionLocal",
+        "app.services.memory_enrichment_tasks.SessionLocal",
         test_session,
+    )
+    monkeypatch.setattr(
+        "app.services.memory_enrichment_tasks.POLL_INTERVAL_SECONDS",
+        3600.0,
     )
 
     def override_session():
@@ -148,21 +152,40 @@ def test_create_schedules_and_runs_enrichment_without_changing_memory(
     assert response.status_code == 201
     assert response.json()["content"] == "  Keep this text exactly.\n "
     assert enriched_contents == ["  Keep this text exactly.\n "]
+    status_response = client.get(
+        f"/memories/{response.json()['id']}/enrichment"
+    )
+    assert status_response.status_code == 200
+    assert status_response.json()["status"] == "completed"
+    assert status_response.json()["attempt_count"] == 1
 
 
-def test_api_enrichment_persists_metadata_and_content_update_deletes_it(
+def test_api_enrichment_status_and_content_update_reenrichment(
     memory_client,
     monkeypatch,
 ):
     client, _ = memory_client
     expected_enrichment = create_enrichment_result()
 
-    from app.api.routes import memories as memory_routes
+    from app.services import memory_enrichment_tasks
 
     class FakeEnrichmentService:
         async def enrich_with_metadata(self, content):
-            assert content == "  Keep this text exactly.\n "
-            return expected_enrichment
+            if content == "  Keep this text exactly.\n ":
+                return expected_enrichment
+            return SimpleNamespace(
+                enrichment=MemoryEnrichmentV1(
+                    summary="Updated memory summary",
+                    category=None,
+                    memory_type=None,
+                    tags=["updated-memory"],
+                    entities=[],
+                    importance=3,
+                ),
+                schema_version="1.0.0",
+                prompt_version="1.4.0",
+                model="gpt-5-mini",
+            )
 
     monkeypatch.setattr(
         "app.api.routes.memories.MemoryEnrichmentService",
@@ -176,7 +199,7 @@ def test_api_enrichment_persists_metadata_and_content_update_deletes_it(
     original_content = created.json()["content"]
     assert original_content == "  Keep this text exactly.\n "
 
-    with memory_routes.SessionLocal() as session:
+    with memory_enrichment_tasks.SessionLocal() as session:
         memory = session.get(Memory, memory_id)
         enrichment = session.get(MemoryEnrichment, memory_id)
 
@@ -202,13 +225,15 @@ def test_api_enrichment_persists_metadata_and_content_update_deletes_it(
     assert updated.status_code == 200
     assert updated.json()["content"] == "Updated memory content."
 
-    with memory_routes.SessionLocal() as session:
+    with memory_enrichment_tasks.SessionLocal() as session:
         memory = session.get(Memory, memory_id)
         enrichment = session.get(MemoryEnrichment, memory_id)
 
         assert memory is not None
         assert memory.content == "Updated memory content."
-        assert enrichment is None
+        assert enrichment is not None
+        assert enrichment.status == "completed"
+        assert enrichment.summary == "Updated memory summary"
 
 
 def test_enrichment_failure_does_not_fail_memory_creation(
@@ -235,6 +260,14 @@ def test_enrichment_failure_does_not_fail_memory_creation(
 
     assert retrieved.status_code == 200
     assert retrieved.json()["content"] == "  Keep this text exactly.\n "
+
+    status_response = client.get(
+        f"/memories/{response.json()['id']}/enrichment"
+    )
+    assert status_response.status_code == 200
+    assert status_response.json()["status"] == "failed"
+    assert status_response.json()["attempt_count"] == 1
+    assert status_response.json()["last_error"] == "RuntimeError"
 
 
 def test_list_supports_keyword_category_and_favorite_filters(
@@ -379,3 +412,14 @@ def test_memory_routes_require_authenticated_user(memory_client):
     response = client.get("/memories")
 
     assert response.status_code == 401
+
+
+def test_enrichment_status_is_scoped_to_memory_owner(memory_client):
+    client, identity = memory_client
+    created = create_memory(client).json()
+
+    identity["user_id"] = "user-2"
+
+    response = client.get(f"/memories/{created['id']}/enrichment")
+
+    assert response.status_code == 404

@@ -1,4 +1,3 @@
-import logging
 from typing import Annotated
 
 from fastapi import (
@@ -14,59 +13,18 @@ from sqlalchemy.orm import Session
 
 from app.core.auth import CurrentUserId
 from app.core.database import get_db_session
-from app.schemas.memory import MemoryCreate, MemoryResponse, MemoryUpdate
-from app.services.memory_enrichment_service import MemoryEnrichmentService
-from app.services.memory_service import MemoryService
-import hashlib
-
-from app.core.database import SessionLocal
 from app.repositories.memory_enrichment_repository import (
     MemoryEnrichmentRepository,
 )
+from app.schemas.memory import MemoryCreate, MemoryResponse, MemoryUpdate
+from app.schemas.memory_enrichment import MemoryEnrichmentStatusResponse
+from app.services.memory_enrichment_service import MemoryEnrichmentService
+from app.services.memory_enrichment_tasks import process_memory_enrichment
+from app.services.memory_service import MemoryService
 
 router = APIRouter(prefix="/memories", tags=["Memories"])
 DbSession = Annotated[Session, Depends(get_db_session)]
-logger = logging.getLogger(__name__)
 
-
-async def enrich_memory_safely(
-    memory_id: str,
-    content: str,
-) -> None:
-    """Generate and persist enrichment without affecting the original memory."""
-
-    try:
-        source_content_hash = hashlib.sha256(
-            content.encode("utf-8")
-        ).hexdigest()
-
-        result = await MemoryEnrichmentService().enrich_with_metadata(content)
-
-        with SessionLocal() as session:
-            repository = MemoryEnrichmentRepository(session)
-
-            saved = repository.save_if_memory_unchanged(
-                memory_id=memory_id,
-                source_content_hash=source_content_hash,
-                enrichment=result.enrichment,
-                schema_version=result.schema_version,
-                prompt_version=result.prompt_version,
-                model=result.model,
-            )
-
-            if not saved:
-                logger.info(
-                    "Skipped enrichment persistence for memory %s: "
-                    "memory was deleted or its content changed.",
-                    memory_id,
-                )
-
-    except Exception:
-        logger.exception(
-            "Memory enrichment failed for memory %s; "
-            "original memory was retained.",
-            memory_id,
-        )
 
 @router.post("", response_model=MemoryResponse, status_code=status.HTTP_201_CREATED)
 def create_memory(
@@ -77,9 +35,9 @@ def create_memory(
 ) -> MemoryResponse:
     memory = MemoryService(session).create(data, user_id)
     background_tasks.add_task(
-        enrich_memory_safely,
+        process_memory_enrichment,
         memory.id,
-        memory.content,
+        MemoryEnrichmentService,
     )
     return MemoryResponse.model_validate(memory)
 
@@ -123,11 +81,54 @@ def update_memory(
     data: MemoryUpdate,
     session: DbSession,
     user_id: CurrentUserId,
+    background_tasks: BackgroundTasks,
 ) -> MemoryResponse:
-    memory = MemoryService(session).update_for_user(memory_id, user_id, data)
+    service = MemoryService(session)
+    current = service.get_for_user(memory_id, user_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="Memory not found.")
+
+    content_changed = data.content is not None and data.content != current.content
+    memory = service.update_for_user(memory_id, user_id, data)
     if memory is None:
         raise HTTPException(status_code=404, detail="Memory not found.")
+    if content_changed:
+        background_tasks.add_task(
+            process_memory_enrichment,
+            memory.id,
+            MemoryEnrichmentService,
+        )
     return MemoryResponse.model_validate(memory)
+
+
+@router.get(
+    "/{memory_id}/enrichment",
+    response_model=MemoryEnrichmentStatusResponse,
+)
+def get_memory_enrichment_status(
+    memory_id: str,
+    session: DbSession,
+    user_id: CurrentUserId,
+) -> MemoryEnrichmentStatusResponse:
+    memory = MemoryService(session).get_for_user(memory_id, user_id)
+    if memory is None:
+        raise HTTPException(status_code=404, detail="Memory not found.")
+
+    enrichment = MemoryEnrichmentRepository(session).get_for_memory(memory_id)
+    if enrichment is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Memory enrichment status not found.",
+        )
+
+    return MemoryEnrichmentStatusResponse(
+        memory_id=memory_id,
+        status=enrichment.status,
+        attempt_count=enrichment.attempt_count,
+        last_error=enrichment.last_error,
+        next_retry_at=enrichment.next_retry_at,
+        completed_at=enrichment.completed_at,
+    )
 
 
 @router.delete("/{memory_id}", status_code=status.HTTP_204_NO_CONTENT)

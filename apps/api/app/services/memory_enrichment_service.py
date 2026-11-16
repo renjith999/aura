@@ -1,13 +1,27 @@
+
+from dataclasses import dataclass
 from typing import Any
 
 from openai import AsyncOpenAI, OpenAIError
 from pydantic import ValidationError
 
 from app.core.config import settings
-from app.schemas.memory_enrichment import MemoryEnrichmentV1
 from app.prompts.memory_enrichment.registry import (
     get_memory_enrichment_prompt,
 )
+from app.schemas.memory_enrichment import MemoryEnrichmentV1
+
+
+MEMORY_ENRICHMENT_SCHEMA_VERSION = "1.0.0"
+
+
+@dataclass(frozen=True)
+class EnrichmentResult:
+    enrichment: MemoryEnrichmentV1
+    schema_version: str
+    prompt_version: str
+    model: str
+
 
 class MemoryEnrichmentError(Exception):
     """Base exception for memory enrichment failures."""
@@ -32,36 +46,24 @@ class MemoryEnrichmentProviderError(MemoryEnrichmentError):
 class MemoryEnrichmentService:
     MODEL = "gpt-5-mini"
 
-    INSTRUCTIONS = """
-    You are Aura's memory enrichment assistant.
-
-    Analyze the supplied memory and return structured metadata.
-
-    Rules:
-    - Be faithful to the original memory.
-    - Never invent facts or infer unsupported personal details.
-    - Use null when a summary, category, memory type, or importance
-      cannot be determined reliably.
-    - Return empty arrays when no reliable tags or entities can be
-      identified.
-    - Keep the summary concise and within 500 characters.
-    - Choose only values allowed by the supplied schema.
-    - Importance measures the long-term usefulness of retaining
-      the memory, not confidence in its accuracy.
-    """
-
     def __init__(self, client: AsyncOpenAI | None = None) -> None:
         self.client: Any = client or AsyncOpenAI(
             api_key=settings.openai_api_key
         )
 
-    
-    
     async def enrich(
         self,
         content: str,
         prompt_version: str | None = None,
     ) -> MemoryEnrichmentV1:
+        result = await self.enrich_with_metadata(content, prompt_version)
+        return result.enrichment
+
+    async def enrich_with_metadata(
+        self,
+        content: str,
+        prompt_version: str | None = None,
+    ) -> EnrichmentResult:
         if not content or not content.strip():
             raise ValueError("Memory content must not be empty.")
 
@@ -102,7 +104,7 @@ class MemoryEnrichmentService:
             )
 
         try:
-            result = MemoryEnrichmentV1.model_validate_json(
+            enrichment = MemoryEnrichmentV1.model_validate_json(
                 response.output_text
             )
         except ValidationError as exc:
@@ -110,8 +112,12 @@ class MemoryEnrichmentService:
                 "OpenAI returned enrichment that failed validation."
             ) from exc
 
-        return result
-
+        return EnrichmentResult(
+            enrichment=enrichment,
+            schema_version=MEMORY_ENRICHMENT_SCHEMA_VERSION,
+            prompt_version=prompt.version,
+            model=self.MODEL,
+        )
 
     @staticmethod
     def _has_refusal(response: Any) -> bool:

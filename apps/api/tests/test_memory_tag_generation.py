@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from app.prompts.memory_enrichment import v1, v1_1, v1_2, v1_3
+from app.prompts.memory_enrichment import v1, v1_1, v1_2, v1_3, v1_4
 from app.prompts.memory_enrichment.registry import (
     CURRENT_PROMPT_VERSION,
     get_memory_enrichment_prompt,
@@ -72,14 +72,14 @@ def test_ten_tags_are_allowed() -> None:
     assert len(result.tags) == 10
 
 
-def test_current_prompt_version_is_v1_3() -> None:
-    assert CURRENT_PROMPT_VERSION == "1.3.0"
-    assert get_memory_enrichment_prompt().version == "1.3.0"
+def test_current_prompt_version_is_v1_4() -> None:
+    assert CURRENT_PROMPT_VERSION == "1.4.0"
+    assert get_memory_enrichment_prompt().version == "1.4.0"
 
 
 @pytest.mark.parametrize(
     "prompt_module",
-    [v1, v1_1, v1_2, v1_3],
+    [v1, v1_1, v1_2, v1_3, v1_4],
 )
 def test_previous_and_current_prompt_versions_remain_available(
     prompt_module,

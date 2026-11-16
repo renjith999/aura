@@ -1,5 +1,6 @@
 
 import os
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -423,3 +424,31 @@ def test_enrichment_status_is_scoped_to_memory_owner(memory_client):
     response = client.get(f"/memories/{created['id']}/enrichment")
 
     assert response.status_code == 404
+def test_list_ordering_is_stable_across_pages(memory_client):
+    client, _ = memory_client
+    notes = [create_memory(client, title=f"Note {index}").json() for index in range(3)]
+
+    expected = sorted(notes, key=lambda note: note["id"])
+    expected.sort(
+        key=lambda note: datetime.fromisoformat(note["created_at"]),
+        reverse=True,
+    )
+    expected_ids = [note["id"] for note in expected]
+
+    first_page = client.get("/memories?limit=2")
+    second_page = client.get("/memories?limit=2&offset=2")
+
+    assert first_page.status_code == 200
+    assert [note["id"] for note in first_page.json()] == expected_ids[:2]
+    assert second_page.status_code == 200
+    assert [note["id"] for note in second_page.json()] == expected_ids[2:]
+    assert [note["id"] for note in client.get("/memories").json()] == expected_ids
+
+
+@pytest.mark.parametrize("query", ["limit=0", "limit=201", "offset=-1"])
+def test_list_rejects_invalid_pagination(memory_client, query):
+    client, _ = memory_client
+
+    response = client.get(f"/memories?{query}")
+
+    assert response.status_code == 422

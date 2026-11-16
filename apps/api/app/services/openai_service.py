@@ -14,12 +14,15 @@ from app.services.tool_executor import (
 
 class OpenAIService:
     def __init__(self, client: AsyncOpenAI | None = None) -> None:
-        self.client: Any = client or AsyncOpenAI(api_key=settings.openai_api_key)
+        self.client: Any = client or AsyncOpenAI(
+            api_key=settings.openai_api_key.get_secret_value()
+        )
 
     async def generate_response(self, message: str) -> str:
         response = await self.client.responses.create(
             model="gpt-5-mini",
             input=message,
+            max_output_tokens=settings.chat_max_output_tokens,
         )
 
         return response.output_text
@@ -28,6 +31,7 @@ class OpenAIService:
         response = await self.client.responses.create(
             model="gpt-5-mini",
             input=message,
+            max_output_tokens=settings.chat_max_output_tokens,
             tools=[SEARCH_MEMORIES_SCHEMA],
         )
 
@@ -64,6 +68,7 @@ class OpenAIService:
                 model="gpt-5-mini",
                 previous_response_id=response.id,
                 input=tool_outputs,
+                max_output_tokens=settings.chat_max_output_tokens,
                 tools=[SEARCH_MEMORIES_SCHEMA],
             )
 

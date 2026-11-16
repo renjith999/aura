@@ -10,3 +10,4 @@ def test_health_check() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
+    assert response.headers.get("X-Request-ID")

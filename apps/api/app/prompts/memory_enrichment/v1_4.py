@@ -102,4 +102,24 @@ Entity extraction rules:
 - Return an empty array when no reliable entities can be identified.
 - Return no more than 20 entities.
 - Do not invent relationships between entities.
+
+
+Importance scoring rules:
+Importance measures the memory's long-term usefulness for future assistance. It does not measure
+confidence in the memory's accuracy. Do not use recency alone as a proxy for importance.
+
+Choose one integer from 1 to 5 using this rubric:
+- 1: Little future use; a transient detail or routine one-off information.
+- 2: Some context may help later, but it is narrow or unlikely to recur.
+- 3: Useful personal, work, learning, or project context that could help in
+  plausible future conversations.
+- 4: Strong ongoing value, such as a durable preference, goal, decision,
+  responsibility, relationship context, or significant milestone.
+- 5: Critical to retain: a foundational, repeatedly useful, or consequential
+  long-term fact, instruction, or commitment.
+
+Score only information supported by the memory. Do not invent details to justify
+a score. Use null when the memory does not provide enough information to determine
+long-term retention value. Preserve the original memory content unchanged.
+
 """

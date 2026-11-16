@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, createMemory, deleteMemory, listMemories } from '../src/api';
+import {
+  ApiError,
+  createMemory,
+  deleteMemory,
+  getMemoryEnrichment,
+  listMemories,
+} from '../src/api';
 
 const jsonResponse = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
@@ -84,5 +90,42 @@ describe('API client', () => {
     ).rejects.toEqual(
       new ApiError('Aura could not reach the server. Check that the API is running.', 0),
     );
+  });
+
+  it('loads effective enrichment metadata with the bearer token', async () => {
+    const response = {
+      memory_id: 'memory/one',
+      status: 'completed',
+      attempt_count: 1,
+      last_error: null,
+      next_retry_at: null,
+      completed_at: '2026-11-16T10:00:00Z',
+      summary: 'Effective summary',
+      category: 'work',
+      memory_type: 'decision',
+      tags: ['planning'],
+      entities: [{ name: 'Aura', entity_type: 'product' }],
+      importance: 4,
+      manual_fields: ['summary'],
+    };
+    fetchMock.mockResolvedValueOnce(jsonResponse(response));
+
+    await expect(getMemoryEnrichment('secret-token', 'memory/one')).resolves.toEqual(response);
+
+    const [input, init] = fetchMock.mock.calls[0]!;
+    expect(String(input)).toBe('http://localhost:8000/memories/memory%2Fone/enrichment');
+    expect(new Headers(init?.headers).get('Authorization')).toBe('Bearer secret-token');
+  });
+
+  it('preserves enrichment 404 responses as ApiErrors for the cache to interpret', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({ detail: 'Memory enrichment status not found.' }, 404),
+    );
+
+    await expect(getMemoryEnrichment('secret-token', 'memory-1')).rejects.toMatchObject({
+      name: 'ApiError',
+      status: 404,
+      message: 'Memory enrichment status not found.',
+    });
   });
 });

@@ -239,7 +239,15 @@ transient provider and network errors can be retried.
 New memories and content edits queue enrichment without changing the original content.
 Use `GET /memories/{memory_id}/enrichment` to read `pending`, `processing`,
 `completed`, or `failed`, along with `attempt_count`, `last_error`, and
-`next_retry_at`. Existing enrichment rows are migrated as completed.
+`next_retry_at`, plus the effective enrichment metadata and `manual_fields`.
+Authenticated clients can use `PATCH /memories/{memory_id}/enrichment` to correct
+summary, category, memory type, tags, entities, and importance. These corrections are
+stored separately from AI-generated values and remain effective across retries and
+content-triggered re-enrichment until cleared with `clear_overrides`. A `null` scalar
+is an explicit manual clear; empty tag/entity arrays clear those values. To return a
+field to its AI-generated value, name it in `clear_overrides`. Corrections never
+change the original memory content. Existing enrichment rows are migrated as
+completed.
 
 ## Python checks
 

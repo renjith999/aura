@@ -1,5 +1,5 @@
-
 from datetime import UTC, datetime
+from uuid import uuid4
 
 from sqlalchemy import (
     JSON,
@@ -39,6 +39,9 @@ class MemoryEnrichment(Base):
         ForeignKey("memories.id", ondelete="CASCADE"),
         primary_key=True,
     )
+    generation_id: Mapped[str] = mapped_column(
+        String(36), nullable=False, default=lambda: str(uuid4())
+    )
 
     summary: Mapped[str | None] = mapped_column(Text, nullable=True)
     category: Mapped[str | None] = mapped_column(String(50), nullable=True)
@@ -58,19 +61,11 @@ class MemoryEnrichment(Base):
 
     importance: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
-    schema_version: Mapped[str] = mapped_column(
-        String(30), nullable=False
-    )
-    prompt_version: Mapped[str] = mapped_column(
-        String(30), nullable=False
-    )
-    model: Mapped[str] = mapped_column(
-        String(100), nullable=False
-    )
+    schema_version: Mapped[str] = mapped_column(String(30), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(30), nullable=False)
+    model: Mapped[str] = mapped_column(String(100), nullable=False)
 
-    source_content_hash: Mapped[str] = mapped_column(
-        String(64), nullable=False
-    )
+    source_content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
 
     status: Mapped[str] = mapped_column(
         String(20),

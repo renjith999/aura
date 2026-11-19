@@ -282,3 +282,23 @@ uv run ruff check app tests migrations
 uv run ruff format --check app tests migrations
 uv run alembic upgrade head
 ```
+
+## Integration and regression tests
+
+The normal API suite uses isolated SQLite databases and does not need the local
+development database. To include the PostgreSQL-only migration and parallel worker
+claim tests, set `AURA62_POSTGRES_TEST_URL` to a disposable PostgreSQL database whose
+name ends in `_aura62_test`. The tests create and remove uniquely named schemas in
+that database; never point this variable at the development database.
+
+```powershell
+$env:AURA62_POSTGRES_TEST_URL = "postgresql+psycopg://<user>:<password>@<host>:5432/aura_aura62_test"
+uv run pytest tests/test_postgres_enrichment_contract.py
+uv run pytest
+```
+
+The PostgreSQL migration scenario upgrades through Alembic head from the revision
+before AURA-61, checks the existing-row generation backfill, usage constraints,
+foreign-key deletion behavior and downgrade. The concurrency scenario uses two
+independent PostgreSQL sessions competing to claim one pending job. Both tests skip
+when the disposable database URL is not configured.

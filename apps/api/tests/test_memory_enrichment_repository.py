@@ -573,3 +573,56 @@ def test_retry_schedule_is_bounded_and_exhausts_after_max_attempts(
     assert record.status == "failed"
     assert record.next_retry_at is None
     assert repository.claim(memory.id, now=now + timedelta(days=1)) is None
+
+
+def test_expired_lease_on_final_attempt_fails_job_and_marks_usage_unknown(
+    enrichment_session,
+):
+    session = enrichment_session
+    memory = create_memory(session)
+    repository = MemoryEnrichmentRepository(session)
+    repository.create_or_reset_pending(
+        memory.id,
+        memory.content,
+        schema_version="1.0.0",
+        prompt_version="1.4.0",
+        model="gpt-5-mini",
+    )
+    session.commit()
+
+    now = datetime.now(UTC)
+    for attempt_number in range(1, MAX_ATTEMPTS + 1):
+        claim = repository.claim(memory.id, now=now)
+        assert claim is not None and claim.attempt_count == attempt_number
+        if attempt_number < MAX_ATTEMPTS:
+            assert repository.fail(
+                claim,
+                error_code="provider_error",
+                retryable=True,
+                now=now,
+            )
+            record = session.get(MemoryEnrichment, memory.id)
+            assert record is not None and record.next_retry_at is not None
+            retry_at = record.next_retry_at
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=UTC)
+            now = retry_at + timedelta(seconds=1)
+        else:
+            attempt = session.get(MemoryEnrichmentAttempt, claim.attempt_id)
+            record = session.get(MemoryEnrichment, memory.id)
+            assert attempt is not None and attempt.outcome == "started"
+            assert record is not None
+            record.lease_expires_at = now - timedelta(seconds=1)
+            session.commit()
+
+    assert repository.fail_expired_final_attempts(now=now) == 1
+    record = session.get(MemoryEnrichment, memory.id)
+    attempt = (
+        session.query(MemoryEnrichmentAttempt)
+        .filter_by(memory_id=memory.id, attempt_number=MAX_ATTEMPTS)
+        .one()
+    )
+    assert record is not None and record.status == "failed"
+    assert record.last_error == "worker_lease_expired"
+    assert record.next_retry_at is None
+    assert attempt.outcome == "unknown"

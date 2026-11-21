@@ -66,13 +66,15 @@ Send the token as `Authorization: Bearer <access-token>` to memory endpoints. To
 
 All memory endpoints require a valid bearer token. Reads and writes are scoped to the signed-in user. Unknown IDs and IDs owned by another user both return `404`.
 
-| Method   | Path                    | Behavior                                      |
-| -------- | ----------------------- | --------------------------------------------- |
-| `POST`   | `/memories`             | Create a memory; returns `201`                |
-| `GET`    | `/memories`             | List and filter the signed-in user's memories |
-| `GET`    | `/memories/{memory_id}` | Retrieve one owned memory                     |
-| `PATCH`  | `/memories/{memory_id}` | Update one or more memory fields              |
-| `DELETE` | `/memories/{memory_id}` | Delete one owned memory; returns `204`        |
+| Method   | Path                               | Behavior                                      |
+| -------- | ---------------------------------- | --------------------------------------------- |
+| `POST`   | `/memories`                        | Create a memory; returns `201`                |
+| `GET`    | `/memories`                        | List and filter the signed-in user's memories |
+| `GET`    | `/memories/{memory_id}`            | Retrieve one owned memory                     |
+| `GET`    | `/memories/{memory_id}/enrichment` | Read enrichment status and effective metadata |
+| `PATCH`  | `/memories/{memory_id}/enrichment` | Correct supported metadata fields             |
+| `PATCH`  | `/memories/{memory_id}`            | Update one or more memory fields              |
+| `DELETE` | `/memories/{memory_id}`            | Delete one owned memory; returns `204`        |
 
 Create request:
 
@@ -121,6 +123,55 @@ curl 'http://localhost:8000/memories?query=project&category=work&is_favorite=fal
   -H 'Authorization: Bearer <access-token>'
 ```
 
+## Memory enrichment and manual metadata correction
+
+Creating a memory schedules enrichment and creates a durable `pending` generation. A change to the memory's `content` schedules a new generation; edits to title, category, or favorite state do not. Enrichment never changes the original memory content. The API worker polls PostgreSQL every second, and a direct FastAPI background task also attempts newly queued work promptly. Each API process runs a poller; atomic row locking coordinates claims across processes.
+
+`GET /memories/{memory_id}/enrichment` returns the lifecycle status and effective metadata. Both the memory and its enrichment record must exist and belong to the authenticated user. Unknown or non-owned memories return `404`; an existing memory whose enrichment row is not available also returns `404` for the enrichment resource.
+
+```json
+{
+  "memory_id": "<memory-id>",
+  "status": "completed",
+  "attempt_count": 1,
+  "last_error": null,
+  "next_retry_at": null,
+  "completed_at": "2026-11-18T12:00:00Z",
+  "summary": "Planning the Aura API release.",
+  "category": "project",
+  "memory_type": "goal",
+  "tags": ["aura", "api"],
+  "entities": [{ "name": "Aura", "entity_type": "other" }],
+  "importance": 4,
+  "manual_fields": ["summary"]
+}
+```
+
+The enrichment response's `category` is the effective enrichment classification. It is distinct from `category` in the memory resource, which is the original user-provided memory category. `summary`, `category`, `memory_type`, `tags`, `entities`, and `importance` are effective metadata values: the backend overlays manual corrections on AI-generated values and reports the corrected field names in `manual_fields`. Clients should display these effective values directly and must not reconstruct overrides. Attempt token usage and cost are stored for audit but are not returned by this API.
+
+Statuses are `pending`, `processing`, `completed`, and `failed`. The response exposes the application attempt count, short error code, next retry time, and completion time where applicable. There are at most three application attempts per generation. Retryable failures are retried after jittered delays around 5 and 30 seconds. The request timeout is 40 seconds, the lease is 90 seconds, and SDK automatic retries are disabled. Incomplete responses and transient network/provider failures are retryable; refusals and structured-output validation failures are terminal. See [the lifecycle diagram](../../docs/architecture.md#memory-and-enrichment-lifecycle) and [operations notes](../../docs/operations.md#worker-behavior-and-recovery).
+
+### Correct effective metadata
+
+`PATCH /memories/{memory_id}/enrichment` accepts one or more metadata fields. Extra fields are rejected. Categories are `personal`, `work`, `learning`, `project`, `finance`, `health`, or `other`; memory types are `fact`, `preference`, `goal`, `achievement`, `event`, `decision`, `instruction`, or `other`. Summary is trimmed, nonblank, and at most 500 characters. Tags are normalized and limited to 10 entries of up to 64 characters. Entities are limited to 20 entries; each name is trimmed, nonblank, and at most 100 characters, with an `entity_type` from `person`, `organization`, `technology`, `product`, `location`, `certification`, `role`, or `other`. Importance is an integer from 1 to 5.
+
+To set fields manually:
+
+```bash
+curl -X PATCH 'http://localhost:8000/memories/<memory-id>/enrichment' \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <access-token>' \
+  -d '{"summary":"Reviewed project goal","tags":["Aura API","release"]}'
+```
+
+A scalar may be set to `null` to explicitly clear that effective value. Use an empty array (`[]`) to clear tags or entities; `null` is invalid for collections. To remove a manual override and restore the AI-generated value, list the field in `clear_overrides`:
+
+```json
+{ "clear_overrides": ["summary", "tags"] }
+```
+
+`clear_overrides` supports `summary`, `category`, `memory_type`, `tags`, `entities`, and `importance`. A request must set or clear at least one field and cannot set and clear the same field at once. Corrections are stored separately from AI values and remain effective across retries and content-triggered re-enrichment. These endpoints never edit the original memory content.
+
 ### Chat
 
 `POST /chat` accepts `{"message":"..."}` (up to `CHAT_MAX_INPUT_CHARACTERS` characters, 4000 by default) and returns `{"response":"..."}`. It requires a valid `Authorization: Bearer <access-token>` header and `OPENAI_API_KEY`; missing or invalid authentication returns `401`, and a missing key returns `503` with code `unavailable`. Each user can make 10 requests per rolling 60-second window by default. The limit is stored as one usage-window row per user in PostgreSQL, so it is shared across API workers and survives restarts. When exceeded, the API returns `429` with code `rate_limited` and a `Retry-After` header. Configure the per-user request count and window with `CHAT_RATE_LIMIT_PER_MINUTE` and `CHAT_RATE_LIMIT_WINDOW_SECONDS`. Provider calls are capped at 1000 output tokens by default (`CHAT_MAX_OUTPUT_TOKENS`). Provider failures return `502` with code `upstream_error`.
@@ -149,23 +200,23 @@ Errors have a stable JSON shape and retain the `detail` field:
 
 Settings are loaded from environment variables or `apps/api/.env`; environment variables take precedence. The checked-in `apps/api/.env.example` is the local template.
 
-| Setting                                                                                                                                                                                                                        | Default                 | Notes                                           |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------- | ----------------------------------------------- |
-| `APP_NAME`                                                                                                                                                                                                                     | `Aura API`              | FastAPI title                                   |
-| `APP_VERSION`                                                                                                                                                                                                                  | `0.1.0`                 | API version shown in docs                       |
-| `ENVIRONMENT`                                                                                                                                                                                                                  | `development`           | `development`, `test`, or `production`          |
-| `API_PORT`                                                                                                                                                                                                                     | `8000`                  | Must be 1–65535                                 |
-| `LOG_LEVEL`                                                                                                                                                                                                                    | `INFO`                  | DEBUG, INFO, WARNING, ERROR, or CRITICAL        |
-| `DATABASE_URL`                                                                                                                                                                                                                 | Local PostgreSQL URL    | Must be a valid SQLAlchemy URL                  |
-| `OPENAI_API_KEY`                                                                                                                                                                                                               | Empty                   | Optional unless `/chat` is used                 |
-| `OPENAI_PRICING_VERSION`                                                                                                                                                                                                       | `unconfigured`           | Version label copied into each enrichment attempt record |
-| `OPENAI_MODEL_PRICING`                                                                                                                                                                                                         | `{}`                    | JSON model-to-rate map; unset rates leave cost estimates unavailable |
-| `ACCESS_TOKEN_TTL_SECONDS`                                                                                                                                                                                                     | `86400`                 | Must be 1–2592000                               |
-| `CHAT_RATE_LIMIT_PER_MINUTE`                                                                                                                                                                                                   | `10`                    | Requests allowed per user during the window     |
-| `CHAT_RATE_LIMIT_WINDOW_SECONDS`                                                                                                                                                                                               | `60`                    | Rolling usage window in seconds                 |
-| `CHAT_MAX_INPUT_CHARACTERS`                                                                                                                                                                                                    | `4000`                  | Maximum characters per chat message             |
-| `CHAT_MAX_OUTPUT_TOKENS`                                                                                                                                                                                                       | `1000`                  | Maximum provider output tokens per chat request |
-| `WEB_ORIGIN`                                                                                                                                                                                                                   | `http://localhost:5173` | HTTP(S) browser origin allowed by CORS          |
+| Setting                                                                                                                                                                                                                        | Default                 | Notes                                                                           |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------- | ------------------------------------------------------------------------------- |
+| `APP_NAME`                                                                                                                                                                                                                     | `Aura API`              | FastAPI title                                                                   |
+| `APP_VERSION`                                                                                                                                                                                                                  | `0.1.0`                 | API version shown in docs                                                       |
+| `ENVIRONMENT`                                                                                                                                                                                                                  | `development`           | `development`, `test`, or `production`                                          |
+| `API_PORT`                                                                                                                                                                                                                     | `8000`                  | Must be 1–65535                                                                 |
+| `LOG_LEVEL`                                                                                                                                                                                                                    | `INFO`                  | DEBUG, INFO, WARNING, ERROR, or CRITICAL                                        |
+| `DATABASE_URL`                                                                                                                                                                                                                 | Local PostgreSQL URL    | Must be a valid SQLAlchemy URL                                                  |
+| `OPENAI_API_KEY`                                                                                                                                                                                                               | Empty                   | Optional at startup; required for `/chat` and provider-backed memory enrichment |
+| `OPENAI_PRICING_VERSION`                                                                                                                                                                                                       | `unconfigured`          | Version label copied into each enrichment attempt record                        |
+| `OPENAI_MODEL_PRICING`                                                                                                                                                                                                         | `{}`                    | JSON model-to-rate map; unset rates leave cost estimates unavailable            |
+| `ACCESS_TOKEN_TTL_SECONDS`                                                                                                                                                                                                     | `86400`                 | Must be 1–2592000                                                               |
+| `CHAT_RATE_LIMIT_PER_MINUTE`                                                                                                                                                                                                   | `10`                    | Requests allowed per user during the window                                     |
+| `CHAT_RATE_LIMIT_WINDOW_SECONDS`                                                                                                                                                                                               | `60`                    | Rolling usage window in seconds                                                 |
+| `CHAT_MAX_INPUT_CHARACTERS`                                                                                                                                                                                                    | `4000`                  | Maximum characters per chat message                                             |
+| `CHAT_MAX_OUTPUT_TOKENS`                                                                                                                                                                                                       | `1000`                  | Maximum provider output tokens per chat request                                 |
+| `WEB_ORIGIN`                                                                                                                                                                                                                   | `http://localhost:5173` | HTTP(S) browser origin allowed by CORS                                          |
 | Production requires `ENVIRONMENT=production` and an explicitly configured server database URL; SQLite is rejected. The OpenAI key and database URL are held as redacted secret settings. Invalid settings fail during startup. |
 
 ## Architecture
@@ -189,16 +240,17 @@ For the local React client, `WEB_ORIGIN` sets the allowed browser origin and def
 
 The memory routes require a valid bearer token and scope each read, update, and delete to the signed-in user. The API supports:
 
-| Method   | Path                    | Behavior                                                                                  |
-| -------- | ----------------------- | ----------------------------------------------------------------------------------------- |
-| `POST`   | `/memories`             | Create a memory; returns `201`                                                            |
-| `GET`    | `/memories`             | List memories; optional `query`, `category`, `is_favorite`, `limit`, and `offset` filters |
-| `GET`    | `/memories/{memory_id}` | Retrieve one owned memory                                                                 |
-| `GET`    | `/memories/{memory_id}/enrichment` | Retrieve enrichment status and retry details                                     |
-| `PATCH`  | `/memories/{memory_id}` | Update title, content, category, or favorite status                                       |
-| `DELETE` | `/memories/{memory_id}` | Delete one owned memory; returns `204`                                                    |
+| Method   | Path                               | Behavior                                                                                  |
+| -------- | ---------------------------------- | ----------------------------------------------------------------------------------------- |
+| `POST`   | `/memories`                        | Create a memory; returns `201`                                                            |
+| `GET`    | `/memories`                        | List memories; optional `query`, `category`, `is_favorite`, `limit`, and `offset` filters |
+| `GET`    | `/memories/{memory_id}`            | Retrieve one owned memory                                                                 |
+| `GET`    | `/memories/{memory_id}/enrichment` | Retrieve status, retry details, and effective metadata                                    |
+| `PATCH`  | `/memories/{memory_id}/enrichment` | Correct supported enrichment metadata fields                                              |
+| `PATCH`  | `/memories/{memory_id}`            | Update title, content, category, or favorite status                                       |
+| `DELETE` | `/memories/{memory_id}`            | Delete one owned memory; returns `204`                                                    |
 
-Example create request (after authentication is connected):
+Example create request (after registering or signing in):
 
 ```bash
 curl -X POST http://localhost:8000/memories \
@@ -216,7 +268,7 @@ curl -X POST http://localhost:8000/auth/register \
 ```
 
 List/search example: `GET /memories?query=project&category=work&is_favorite=false`. Search is a deterministic case-insensitive text match across title and content; results are ordered by newest creation time, then stable ID. Unknown and non-owned IDs return the same `404` response.
-The memory API stores the submitted text as-is and uses deterministic case-insensitive keyword matching across title and content. It does not currently use embeddings, semantic search, or RAG. See [the architecture notes](../../docs/architecture.md) for the system diagram, storage choices, and open operational decisions.
+The memory API stores the submitted text as-is and uses deterministic case-insensitive keyword matching across title and content. It does not currently use embeddings, semantic search, or RAG. See [architecture](../../docs/architecture.md), [database schema](../../docs/database.md), and [operations](../../docs/operations.md) for system boundaries, storage choices, and worker operations.
 
 ## Memory enrichment worker
 

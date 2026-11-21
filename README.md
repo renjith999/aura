@@ -46,4 +46,4 @@ The FastAPI service runs at `http://localhost:8000`. Its health endpoint is `htt
 | `pnpm build`                                               | Build JavaScript workspaces                          |
 | `pnpm lint`                                                | Lint JavaScript workspaces                           |
 
-See the [API guide](apps/api/README.md) for endpoint examples, authentication, error responses, and configuration; [the architecture notes](docs/architecture.md) for code boundaries and current decisions; and [the contribution guide](CONTRIBUTING.md) for repository conventions.
+See the [API guide](apps/api/README.md) for endpoint examples, authentication, error responses, and configuration; [the architecture guide](docs/architecture.md) for system boundaries and lifecycle diagrams; [the database reference](docs/database.md) for tables and migrations; [the operations guide](docs/operations.md) for runtime setup and worker behavior; [ADR 0001](docs/adr/0001-durable-enrichment-and-audit.md) for enrichment design decisions; and [the contribution guide](CONTRIBUTING.md) for repository conventions.

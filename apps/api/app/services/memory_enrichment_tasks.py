@@ -5,16 +5,21 @@ from collections.abc import Callable
 
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.core.database import SessionLocal
 from app.models.memory import Memory
 from app.repositories.memory_enrichment_repository import (
     EnrichmentClaim,
     MemoryEnrichmentRepository,
 )
+from app.services.enrichment_cost import CostEstimate, calculate_cost_estimate
 from app.services.memory_enrichment_service import (
+    EnrichmentAttemptData,
     MemoryEnrichmentIncompleteError,
     MemoryEnrichmentProviderError,
+    MemoryEnrichmentRefusalError,
     MemoryEnrichmentService,
+    MemoryEnrichmentValidationError,
 )
 
 logger = logging.getLogger(__name__)
@@ -36,6 +41,8 @@ async def process_memory_enrichment(
     if claim is None:
         return False
 
+    attempt_data: EnrichmentAttemptData | None = None
+    provider_succeeded = False
     try:
         content = _load_claimed_content(claim)
         if (
@@ -43,11 +50,19 @@ async def process_memory_enrichment(
             or hashlib.sha256(content.encode("utf-8")).hexdigest()
             != claim.source_content_hash
         ):
-            _mark_failed(claim, "source_content_changed", retryable=False)
+            _mark_failed(
+                claim,
+                "source_content_changed",
+                retryable=False,
+                outcome="not_sent",
+            )
             return True
 
         service = (service_factory or MemoryEnrichmentService)()
         result = await service.enrich_with_metadata(content)
+        attempt_data = getattr(result, "attempt", None)
+        provider_succeeded = True
+        estimate = _estimate_for_attempt(claim.model, attempt_data)
 
         with SessionLocal() as session:
             saved = MemoryEnrichmentRepository(session).complete(
@@ -56,16 +71,22 @@ async def process_memory_enrichment(
                 schema_version=result.schema_version,
                 prompt_version=result.prompt_version,
                 model=result.model,
+                attempt_data=attempt_data,
+                cost_estimate=estimate,
             )
 
         if not saved:
             logger.info("Discarded stale enrichment for memory %s.", claim.memory_id)
     except Exception as exc:
+        attempt_data = getattr(exc, "attempt", None) or attempt_data
         try:
             _mark_failed(
                 claim,
                 type(exc).__name__,
                 retryable=_is_retryable(exc),
+                attempt_data=attempt_data,
+                outcome=("completed" if provider_succeeded else _attempt_outcome(exc)),
+                cost_estimate=_estimate_for_attempt(claim.model, attempt_data),
             )
         except Exception:
             logger.exception(
@@ -82,9 +103,7 @@ async def process_memory_enrichment(
 
 def _load_claimed_content(claim: EnrichmentClaim) -> str | None:
     with SessionLocal() as session:
-        memory = session.scalar(
-            select(Memory).where(Memory.id == claim.memory_id)
-        )
+        memory = session.scalar(select(Memory).where(Memory.id == claim.memory_id))
         if memory is None:
             return None
         return memory.content
@@ -94,13 +113,51 @@ def _mark_failed(
     claim: EnrichmentClaim,
     error_code: str,
     retryable: bool,
+    attempt_data: EnrichmentAttemptData | None = None,
+    outcome: str = "application_error",
+    cost_estimate: CostEstimate | None = None,
 ) -> None:
     with SessionLocal() as session:
         MemoryEnrichmentRepository(session).fail(
             claim=claim,
             error_code=error_code,
             retryable=retryable,
+            attempt_data=attempt_data,
+            outcome=outcome,
+            cost_estimate=cost_estimate,
         )
+
+
+def _estimate_for_attempt(
+    requested_model: str,
+    attempt_data: EnrichmentAttemptData | None,
+) -> CostEstimate:
+    usage = attempt_data.usage if attempt_data is not None else None
+    model = (
+        attempt_data.response_model
+        if attempt_data is not None and attempt_data.response_model
+        else requested_model
+    )
+    return calculate_cost_estimate(
+        model,
+        usage,
+        settings.openai_model_pricing,
+        settings.openai_pricing_version,
+    )
+
+
+def _attempt_outcome(error: Exception) -> str:
+    if isinstance(error, MemoryEnrichmentIncompleteError):
+        return "incomplete"
+    if isinstance(error, MemoryEnrichmentRefusalError):
+        return "refused"
+    if isinstance(error, MemoryEnrichmentValidationError):
+        return "validation_error"
+    if isinstance(error, MemoryEnrichmentProviderError):
+        return "provider_error"
+    if isinstance(error, (TimeoutError, ConnectionError)):
+        return "transport_error"
+    return "application_error"
 
 
 def _is_retryable(error: Exception) -> bool:
@@ -119,9 +176,7 @@ async def run_memory_enrichment_worker() -> None:
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
         try:
             with SessionLocal() as session:
-                MemoryEnrichmentRepository(
-                    session
-                ).fail_expired_final_attempts()
+                MemoryEnrichmentRepository(session).fail_expired_final_attempts()
 
             processed = await process_memory_enrichment()
             if processed:
@@ -130,4 +185,3 @@ async def run_memory_enrichment_worker() -> None:
             raise
         except Exception:
             logger.exception("Memory enrichment worker iteration failed.")
-

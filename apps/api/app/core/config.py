@@ -1,10 +1,18 @@
+from decimal import Decimal
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import BaseModel, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
+
+
+class OpenAIModelPricing(BaseModel):
+    input_per_million: Decimal = Field(ge=0)
+    output_per_million: Decimal = Field(ge=0)
+    cached_input_per_million: Decimal | None = Field(default=None, ge=0)
+    cache_write_input_per_million: Decimal | None = Field(default=None, ge=0)
 
 
 class Settings(BaseSettings):
@@ -15,6 +23,10 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
     openai_api_key: SecretStr = Field(default=SecretStr(""), repr=False)
+    openai_pricing_version: str = Field(
+        default="unconfigured", min_length=1, max_length=80
+    )
+    openai_model_pricing: dict[str, OpenAIModelPricing] = Field(default_factory=dict)
     database_url: SecretStr = Field(
         default=SecretStr("postgresql+psycopg://postgres:postgres@localhost:5432/aura"),
         repr=False,

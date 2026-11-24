@@ -233,6 +233,115 @@ describe('Aura web app', () => {
     expect(enrichmentCalls).toBe(2);
   });
 
+  it('clears pending enrichment polling when the memory view unmounts', async () => {
+    let enrichmentCalls = 0;
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.endsWith('/enrichment')) {
+        enrichmentCalls += 1;
+        return jsonResponse(enrichmentFixture(memoryFixture.id, 'processing'));
+      }
+      if (url.endsWith('/memories')) return jsonResponse([memoryFixture]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    sessionStorage.setItem('aura.access-token', 'session-token');
+    sessionStorage.setItem('aura.account-email', 'renji@example.com');
+
+    const view = render(<App />);
+    expect(await screen.findByText('Processing')).toBeTruthy();
+    const requestsAtUnmount = enrichmentCalls;
+    view.unmount();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 2600));
+    });
+    expect(enrichmentCalls).toBe(requestsAtUnmount);
+  });
+
+  it('preserves favorite updates and deletion while invalidating enrichment cache', async () => {
+    let savedMemory = { ...memoryFixture };
+    let deleted = false;
+    let enrichmentCalls = 0;
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/enrichment')) {
+        enrichmentCalls += 1;
+        return jsonResponse(enrichmentFixture(savedMemory.id));
+      }
+      if (url.endsWith('/memories/memory-1') && init?.method === 'PATCH') {
+        const body = JSON.parse(String(init.body)) as { is_favorite: boolean };
+        savedMemory = { ...savedMemory, is_favorite: body.is_favorite };
+        return jsonResponse(savedMemory);
+      }
+      if (url.endsWith('/memories/memory-1') && init?.method === 'DELETE') {
+        deleted = true;
+        return new Response(null, { status: 204 });
+      }
+      if (url.includes('/memories')) return jsonResponse(deleted ? [] : [savedMemory]);
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    sessionStorage.setItem('aura.access-token', 'session-token');
+    sessionStorage.setItem('aura.account-email', 'renji@example.com');
+
+    render(<App />);
+    expect(await screen.findByText('A manually refined note about a morning walk.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Add to favorites' }));
+    expect(await screen.findByText('Added to favorites.')).toBeTruthy();
+    expect(savedMemory.is_favorite).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Morning walk' }));
+    expect(confirm).toHaveBeenCalledWith('Delete “Morning walk”? This cannot be undone.');
+    expect(await screen.findByText('Memory deleted.')).toBeTruthy();
+    expect(await screen.findByText('Your first memory is waiting.')).toBeTruthy();
+    expect(deleted).toBe(true);
+    expect(enrichmentCalls).toBe(1);
+  });
+
+  it('does not reuse enrichment data after switching accounts', async () => {
+    let activeToken = 'first-token';
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      const token = new Headers(init?.headers).get('Authorization');
+      if (url.endsWith('/auth/logout')) return new Response(null, { status: 204 });
+      if (url.endsWith('/auth/login')) {
+        activeToken = 'second-token';
+        return jsonResponse({
+          ...authResponse,
+          access_token: activeToken,
+          user: { id: 'user-2', email: 'second@example.com' },
+        });
+      }
+      if (url.endsWith('/enrichment')) {
+        return jsonResponse({
+          ...enrichmentFixture(memoryFixture.id),
+          summary: token === 'Bearer first-token' ? 'First account data.' : 'Second account data.',
+        });
+      }
+      if (url.includes('/memories')) {
+        return jsonResponse(token === 'Bearer first-token' || activeToken === 'second-token'
+          ? [memoryFixture]
+          : []);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    sessionStorage.setItem('aura.access-token', 'first-token');
+    sessionStorage.setItem('aura.account-email', 'first@example.com');
+
+    render(<App />);
+    expect(await screen.findByText('First account data.')).toBeTruthy();
+    fireEvent.click(screen.getByText('Sign out', { selector: 'button' }));
+    expect(await screen.findByLabelText('Email address')).toBeTruthy();
+    fireEvent.change(screen.getByLabelText('Email address'), {
+      target: { value: 'second@example.com' },
+    });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'correct horse' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    expect(await screen.findByText('Second account data.')).toBeTruthy();
+    expect(screen.queryByText('First account data.')).toBeNull();
+  });
+
   it('invalidates cached enrichment after editing original memory content', async () => {
     let savedMemory = memoryFixture;
     let enrichmentCalls = 0;

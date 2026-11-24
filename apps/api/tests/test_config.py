@@ -17,6 +17,11 @@ def test_settings_load_values_from_environment(monkeypatch) -> None:
     monkeypatch.setenv("API_PORT", "8011")
     monkeypatch.setenv("DATABASE_URL", "sqlite:///./configured.db")
     monkeypatch.setenv("LOG_LEVEL", "warning")
+    monkeypatch.setenv("OPENAI_PRICING_VERSION", "pricing-test-v1")
+    monkeypatch.setenv(
+        "OPENAI_MODEL_PRICING",
+        '{"gpt-5-mini":{"input_per_million":"1.25","output_per_million":"4.5"}}',
+    )
 
     configured = Settings(_env_file=None)
 
@@ -24,6 +29,10 @@ def test_settings_load_values_from_environment(monkeypatch) -> None:
     assert configured.api_port == 8011
     assert configured.database_url.get_secret_value() == "sqlite:///./configured.db"
     assert configured.log_level == "WARNING"
+    assert configured.openai_pricing_version == "pricing-test-v1"
+    assert str(configured.openai_model_pricing["gpt-5-mini"].input_per_million) == (
+        "1.25"
+    )
 
 
 @pytest.mark.parametrize(

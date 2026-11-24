@@ -158,6 +158,8 @@ Settings are loaded from environment variables or `apps/api/.env`; environment v
 | `LOG_LEVEL`                                                                                                                                                                                                                    | `INFO`                  | DEBUG, INFO, WARNING, ERROR, or CRITICAL        |
 | `DATABASE_URL`                                                                                                                                                                                                                 | Local PostgreSQL URL    | Must be a valid SQLAlchemy URL                  |
 | `OPENAI_API_KEY`                                                                                                                                                                                                               | Empty                   | Optional unless `/chat` is used                 |
+| `OPENAI_PRICING_VERSION`                                                                                                                                                                                                       | `unconfigured`           | Version label copied into each enrichment attempt record |
+| `OPENAI_MODEL_PRICING`                                                                                                                                                                                                         | `{}`                    | JSON model-to-rate map; unset rates leave cost estimates unavailable |
 | `ACCESS_TOKEN_TTL_SECONDS`                                                                                                                                                                                                     | `86400`                 | Must be 1–2592000                               |
 | `CHAT_RATE_LIMIT_PER_MINUTE`                                                                                                                                                                                                   | `10`                    | Requests allowed per user during the window     |
 | `CHAT_RATE_LIMIT_WINDOW_SECONDS`                                                                                                                                                                                               | `60`                    | Rolling usage window in seconds                 |
@@ -236,6 +238,27 @@ seconds, and SDK-level automatic retries are disabled so the persisted attempt c
 remains the retry limit. Refusals and invalid enrichment output fail without retry;
 transient provider and network errors can be retried.
 
+Each atomic worker claim creates a row in `memory_enrichment_attempts`. The row is
+updated with the Responses API response/request IDs, returned model, status, token
+usage and outcome when available. Refused, incomplete and invalid responses retain
+reported usage. Provider failures without usage keep token and cost fields null. A
+worker crash can leave an attempt as `unknown`; recovery never overwrites that row,
+and a retry receives a separate record. Usage rows contain no memory text and remain
+for billing aggregates after memory deletion, with their memory reference cleared.
+
+Estimated cost is calculated with Decimal arithmetic from the returned model and
+deployment configuration. `OPENAI_MODEL_PRICING` is a JSON object keyed by model;
+each value has `input_per_million` and `output_per_million`, and may specify
+`cached_input_per_million` and `cache_write_input_per_million`. Values are decimal
+USD rates. `OPENAI_PRICING_VERSION` labels the configuration snapshot. The applied
+rates and version are copied to each attempt for historical explanation. Configure
+rates from the organization's approved price source, keyed by the exact returned
+Responses API model name; this repository intentionally does not set provider prices.
+Missing models, missing rates for reported cached
+tokens, or invalid/missing usage produce a null estimate without failing enrichment.
+These are estimates based on usage, not actual billed amounts. No usage reporting API
+or frontend display is added by this task.
+
 New memories and content edits queue enrichment without changing the original content.
 Use `GET /memories/{memory_id}/enrichment` to read `pending`, `processing`,
 `completed`, or `failed`, along with `attempt_count`, `last_error`, and
@@ -259,3 +282,23 @@ uv run ruff check app tests migrations
 uv run ruff format --check app tests migrations
 uv run alembic upgrade head
 ```
+
+## Integration and regression tests
+
+The normal API suite uses isolated SQLite databases and does not need the local
+development database. To include the PostgreSQL-only migration and parallel worker
+claim tests, set `AURA62_POSTGRES_TEST_URL` to a disposable PostgreSQL database whose
+name ends in `_aura62_test`. The tests create and remove uniquely named schemas in
+that database; never point this variable at the development database.
+
+```powershell
+$env:AURA62_POSTGRES_TEST_URL = "postgresql+psycopg://<user>:<password>@<host>:5432/aura_aura62_test"
+uv run pytest tests/test_postgres_enrichment_contract.py
+uv run pytest
+```
+
+The PostgreSQL migration scenario upgrades through Alembic head from the revision
+before AURA-61, checks the existing-row generation backfill, usage constraints,
+foreign-key deletion behavior and downgrade. The concurrency scenario uses two
+independent PostgreSQL sessions competing to claim one pending job. Both tests skip
+when the disposable database URL is not configured.

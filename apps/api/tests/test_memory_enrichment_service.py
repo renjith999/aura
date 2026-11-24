@@ -1,4 +1,3 @@
-
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
@@ -62,11 +61,17 @@ def create_response(
     status="completed",
     output_text=None,
     output=None,
+    usage=None,
+    response_id="resp-test-id",
+    model="gpt-5-mini-2026-01-01",
 ):
     return SimpleNamespace(
+        id=response_id,
+        model=model,
         status=status,
         output_text=output_text,
         output=output or [],
+        usage=usage,
     )
 
 
@@ -81,18 +86,14 @@ async def test_enrich_returns_validated_memory_enrichment():
 
     service.client.responses.create.return_value = response
 
-    result = await service.enrich(
-        "I am building Aura using Python and FastAPI."
-    )
+    result = await service.enrich("I am building Aura using Python and FastAPI.")
 
     assert result == expected
     service.client.responses.create.assert_awaited_once()
 
     call_args = service.client.responses.create.await_args
     assert call_args.kwargs["model"] == "gpt-5-mini"
-    assert call_args.kwargs["input"] == (
-        "I am building Aura using Python and FastAPI."
-    )
+    assert call_args.kwargs["input"] == ("I am building Aura using Python and FastAPI.")
 
     text_format = call_args.kwargs["text"]["format"]
     assert text_format["type"] == "json_schema"
@@ -121,12 +122,23 @@ async def test_enrich_handles_model_refusal():
     response = create_response(
         output_text="This is not valid JSON",
         output=[message],
+        usage=SimpleNamespace(
+            input_tokens=10,
+            output_tokens=3,
+            total_tokens=13,
+            input_tokens_details=SimpleNamespace(
+                cached_tokens=0,
+                cache_write_tokens=0,
+            ),
+            output_tokens_details=SimpleNamespace(reasoning_tokens=0),
+        ),
     )
 
     service.client.responses.create.return_value = response
 
-    with pytest.raises(MemoryEnrichmentRefusalError):
+    with pytest.raises(MemoryEnrichmentRefusalError) as error:
         await service.enrich("Some memory content")
+    assert error.value.attempt.usage.total_tokens == 13
 
 
 @pytest.mark.asyncio
@@ -150,12 +162,23 @@ async def test_enrich_handles_missing_output_text():
 
     response = create_response(
         output_text="",
+        usage=SimpleNamespace(
+            input_tokens=10,
+            output_tokens=1,
+            total_tokens=11,
+            input_tokens_details=SimpleNamespace(
+                cached_tokens=0,
+                cache_write_tokens=0,
+            ),
+            output_tokens_details=SimpleNamespace(reasoning_tokens=0),
+        ),
     )
 
     service.client.responses.create.return_value = response
 
-    with pytest.raises(MemoryEnrichmentValidationError):
+    with pytest.raises(MemoryEnrichmentValidationError) as error:
         await service.enrich("Some memory content")
+    assert error.value.attempt.usage.total_tokens == 11
 
 
 @pytest.mark.asyncio
@@ -176,12 +199,14 @@ async def test_enrich_handles_invalid_structured_output():
 async def test_enrich_handles_openai_error():
     service = create_test_service()
 
-    service.client.responses.create.side_effect = OpenAIError(
-        "Simulated OpenAI failure"
-    )
+    provider_error = OpenAIError("Simulated OpenAI failure")
+    provider_error.request_id = "req-provider-error"
+    service.client.responses.create.side_effect = provider_error
 
-    with pytest.raises(MemoryEnrichmentProviderError):
+    with pytest.raises(MemoryEnrichmentProviderError) as error:
         await service.enrich("Some memory content")
+    assert error.value.attempt.request_id == "req-provider-error"
+    assert error.value.attempt.usage is None
 
 
 @pytest.mark.asyncio
@@ -211,12 +236,79 @@ async def test_incomplete_response_is_checked_before_json_validation():
     response = create_response(
         status="incomplete",
         output_text="This is deliberately invalid JSON",
+        usage=SimpleNamespace(
+            input_tokens=42,
+            output_tokens=8,
+            total_tokens=50,
+            input_tokens_details=SimpleNamespace(
+                cached_tokens=2,
+                cache_write_tokens=0,
+            ),
+            output_tokens_details=SimpleNamespace(reasoning_tokens=1),
+        ),
     )
 
     service.client.responses.create.return_value = response
 
-    with pytest.raises(MemoryEnrichmentIncompleteError):
+    with pytest.raises(MemoryEnrichmentIncompleteError) as error:
         await service.enrich("Some memory content")
+    assert error.value.attempt.usage.input_tokens == 42
+    assert error.value.attempt.usage.output_tokens == 8
+    assert error.value.attempt.response_id == "resp-test-id"
+    assert error.value.attempt.provider_status == "incomplete"
+
+
+@pytest.mark.asyncio
+async def test_usage_and_success_request_id_are_captured_from_raw_response():
+    service = create_test_service()
+    expected = create_enrichment()
+    response = create_response(
+        output_text=expected.model_dump_json(),
+        usage=SimpleNamespace(
+            input_tokens=120,
+            output_tokens=40,
+            total_tokens=160,
+            input_tokens_details=SimpleNamespace(
+                cached_tokens=20,
+                cache_write_tokens=5,
+            ),
+            output_tokens_details=SimpleNamespace(reasoning_tokens=7),
+        ),
+    )
+    raw_response = SimpleNamespace(
+        parse=Mock(return_value=response),
+        headers={"x-request-id": "req-test-id"},
+    )
+    service.client.responses.with_raw_response = SimpleNamespace(
+        create=AsyncMock(return_value=raw_response)
+    )
+
+    result = await service.enrich_with_metadata("Original memory text")
+
+    assert result.enrichment == expected
+    assert result.attempt.response_id == "resp-test-id"
+    assert result.attempt.request_id == "req-test-id"
+    assert result.attempt.response_model == "gpt-5-mini-2026-01-01"
+    assert result.attempt.usage.input_tokens == 120
+    assert result.attempt.usage.output_tokens == 40
+    assert result.attempt.usage.total_tokens == 160
+    assert result.attempt.usage.cached_input_tokens == 20
+    assert result.attempt.usage.cache_write_input_tokens == 5
+    assert result.attempt.usage.reasoning_output_tokens == 7
+
+
+@pytest.mark.asyncio
+async def test_missing_response_usage_is_preserved_as_unavailable():
+    service = create_test_service()
+    expected = create_enrichment()
+    service.client.responses.create.return_value = create_response(
+        output_text=expected.model_dump_json(),
+    )
+
+    result = await service.enrich_with_metadata("Original memory text")
+
+    assert result.attempt.usage is None
+
 
 def test_prompt_registry_returns_current_version_by_default():
     prompt = get_memory_enrichment_prompt()

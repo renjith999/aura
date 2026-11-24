@@ -1,6 +1,6 @@
-
 import os
 from datetime import datetime
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -9,13 +9,16 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.core.auth import get_current_user_id
+from app.core.config import OpenAIModelPricing, settings
 from app.core.database import get_db_session
 from app.main import app
 from app.models.base import Base
 from app.models.memory import Memory
 from app.models.memory_enrichment import MemoryEnrichment
+from app.models.memory_enrichment_attempt import MemoryEnrichmentAttempt
 from app.models.memory_enrichment_override import MemoryEnrichmentOverride
 from app.schemas.memory_enrichment import MemoryEnrichmentV1
+from app.services.memory_enrichment_service import MemoryEnrichmentService
 
 
 def create_enrichment_result():
@@ -87,9 +90,7 @@ def memory_client(tmp_path, monkeypatch):
             yield session
 
     app.dependency_overrides[get_db_session] = override_session
-    app.dependency_overrides[get_current_user_id] = (
-        lambda: identity["user_id"]
-    )
+    app.dependency_overrides[get_current_user_id] = lambda: identity["user_id"]
     app.state.test_session_factory = test_session
 
     try:
@@ -158,12 +159,127 @@ def test_create_schedules_and_runs_enrichment_without_changing_memory(
     assert response.status_code == 201
     assert response.json()["content"] == "  Keep this text exactly.\n "
     assert enriched_contents == ["  Keep this text exactly.\n "]
-    status_response = client.get(
-        f"/memories/{response.json()['id']}/enrichment"
-    )
+    status_response = client.get(f"/memories/{response.json()['id']}/enrichment")
     assert status_response.status_code == 200
     assert status_response.json()["status"] == "completed"
     assert status_response.json()["attempt_count"] == 1
+
+
+def test_authenticated_api_to_real_service_worker_persists_enrichment_and_usage(
+    memory_client,
+    monkeypatch,
+):
+    """Exercise route, actual service, worker, repositories and readback together."""
+    client, _ = memory_client
+    response_payload = MemoryEnrichmentV1(
+        summary="Provider generated summary",
+        category="project",
+        memory_type="fact",
+        tags=["aura", "integration"],
+        entities=[{"name": "Aura", "entity_type": "product"}],
+        importance=4,
+    ).model_dump_json()
+    raw_response = SimpleNamespace(
+        headers={"x-request-id": "req-aura62-integration"},
+        parse=lambda: SimpleNamespace(
+            id="resp-aura62-integration",
+            model="gpt-5-mini-2026-01-01",
+            status="completed",
+            output_text=response_payload,
+            output=[],
+            usage=SimpleNamespace(
+                input_tokens=1000,
+                output_tokens=200,
+                total_tokens=1200,
+                input_tokens_details=SimpleNamespace(cached_tokens=125),
+                output_tokens_details=SimpleNamespace(reasoning_tokens=30),
+            ),
+        ),
+    )
+
+    class RawResponses:
+        async def create(self, **_kwargs):
+            return raw_response
+
+    mock_client = SimpleNamespace(
+        responses=SimpleNamespace(with_raw_response=RawResponses())
+    )
+    monkeypatch.setattr(
+        "app.api.routes.memories.MemoryEnrichmentService",
+        lambda: MemoryEnrichmentService(client=mock_client),
+    )
+    monkeypatch.setattr(
+        settings,
+        "openai_model_pricing",
+        {
+            "gpt-5-mini-2026-01-01": OpenAIModelPricing(
+                input_per_million=Decimal("1.25"),
+                output_per_million=Decimal("4.50"),
+                cached_input_per_million=Decimal("0.125"),
+            )
+        },
+    )
+    monkeypatch.setattr(settings, "openai_pricing_version", "aura62-integration-v1")
+
+    original_content = "  User supplied project text.\n"
+    created = create_memory(client, content=original_content)
+    assert created.status_code == 201
+    memory_id = created.json()["id"]
+    assert created.json()["content"] == original_content
+
+    readback = client.get(f"/memories/{memory_id}/enrichment")
+    assert readback.status_code == 200
+    enrichment_payload = readback.json()
+    assert enrichment_payload == {
+        "memory_id": memory_id,
+        "status": "completed",
+        "attempt_count": 1,
+        "last_error": None,
+        "next_retry_at": None,
+        "completed_at": enrichment_payload["completed_at"],
+        "summary": "Provider generated summary",
+        "category": "project",
+        "memory_type": "fact",
+        "tags": ["aura", "integration"],
+        "entities": [{"name": "Aura", "entity_type": "product"}],
+        "importance": 4,
+        "manual_fields": [],
+    }
+    assert enrichment_payload["completed_at"] is not None
+    assert client.get(f"/memories/{memory_id}").json()["content"] == original_content
+
+    corrected = client.patch(
+        f"/memories/{memory_id}/enrichment",
+        json={"summary": "Manually corrected summary."},
+    )
+    assert corrected.status_code == 200
+    assert corrected.json()["summary"] == "Manually corrected summary."
+    assert corrected.json()["manual_fields"] == ["summary"]
+
+    with client.app.state.test_session_factory() as session:
+        attempt = (
+            session.query(MemoryEnrichmentAttempt).filter_by(memory_id=memory_id).one()
+        )
+        assert attempt.outcome == "completed"
+        assert attempt.requested_model == "gpt-5-mini"
+        assert attempt.response_model == "gpt-5-mini-2026-01-01"
+        assert attempt.response_id == "resp-aura62-integration"
+        assert attempt.request_id == "req-aura62-integration"
+        assert (attempt.input_tokens, attempt.output_tokens, attempt.total_tokens) == (
+            1000,
+            200,
+            1200,
+        )
+        assert attempt.cached_input_tokens == 125
+        assert attempt.reasoning_output_tokens == 30
+        assert attempt.cost_estimate == Decimal("0.002009375000")
+        assert attempt.pricing_version == "aura62-integration-v1"
+        enrichment = session.get(MemoryEnrichment, memory_id)
+        assert enrichment is not None
+        assert enrichment.summary == "Provider generated summary"
+        memory = session.get(Memory, memory_id)
+        assert memory is not None
+        assert memory.content == original_content
 
 
 def test_api_enrichment_status_and_content_update_reenrichment(
@@ -267,9 +383,7 @@ def test_enrichment_failure_does_not_fail_memory_creation(
     assert retrieved.status_code == 200
     assert retrieved.json()["content"] == "  Keep this text exactly.\n "
 
-    status_response = client.get(
-        f"/memories/{response.json()['id']}/enrichment"
-    )
+    status_response = client.get(f"/memories/{response.json()['id']}/enrichment")
     assert status_response.status_code == 200
     assert status_response.json()["status"] == "failed"
     assert status_response.json()["attempt_count"] == 1
@@ -298,15 +412,9 @@ def test_list_supports_keyword_category_and_favorite_filters(
 
     assert client.get("/memories?query=FastAPI").json() == [favorite]
 
-    assert (
-        client.get("/memories?category=work").json()[0]["category"]
-        == "work"
-    )
+    assert client.get("/memories?category=work").json()[0]["category"] == "work"
 
-    assert (
-        client.get("/memories?is_favorite=true").json()
-        == [favorite]
-    )
+    assert client.get("/memories?is_favorite=true").json() == [favorite]
 
 
 def test_empty_list_is_successful(memory_client):
@@ -600,6 +708,8 @@ def test_manual_enrichment_correction_rejects_invalid_data(memory_client, payloa
     response = client.patch(f"/memories/{memory_id}/enrichment", json=payload)
 
     assert response.status_code == 422
+
+
 def test_list_ordering_is_stable_across_pages(memory_client):
     client, _ = memory_client
     notes = [create_memory(client, title=f"Note {index}").json() for index in range(3)]

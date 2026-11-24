@@ -1,14 +1,14 @@
-
 import hashlib
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, event, select
 from sqlalchemy.orm import Session
 
 from app.models.base import Base
 from app.models.memory import Memory
 from app.models.memory_enrichment import MemoryEnrichment
+from app.models.memory_enrichment_attempt import MemoryEnrichmentAttempt
 from app.repositories.memory_enrichment_repository import (
     LEASE_SECONDS,
     MAX_ATTEMPTS,
@@ -29,6 +29,13 @@ def enrichment_session(tmp_path):
         f"sqlite:///{tmp_path / 'memory-enrichment-repository.db'}",
         connect_args={"check_same_thread": False},
     )
+
+    @event.listens_for(engine, "connect")
+    def enable_sqlite_foreign_keys(connection, _record):
+        cursor = connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
     Base.metadata.create_all(engine)
 
     try:
@@ -162,9 +169,7 @@ def test_updates_existing_enrichment_without_creating_duplicate(
 
     records = list(
         session.scalars(
-            select(MemoryEnrichment).where(
-                MemoryEnrichment.memory_id == memory.id
-            )
+            select(MemoryEnrichment).where(MemoryEnrichment.memory_id == memory.id)
         )
     )
 
@@ -214,10 +219,13 @@ def test_rejects_enrichment_when_memory_does_not_exist(enrichment_session):
     )
 
     assert saved is False
-    assert enrichment_session.get(
-        MemoryEnrichment,
-        "missing-memory-id",
-    ) is None
+    assert (
+        enrichment_session.get(
+            MemoryEnrichment,
+            "missing-memory-id",
+        )
+        is None
+    )
 
 
 def test_persists_enrichment_metadata_and_entity_values(enrichment_session):
@@ -241,8 +249,7 @@ def test_persists_enrichment_metadata_and_entity_values(enrichment_session):
     assert isinstance(record.tags, list)
     assert isinstance(record.entities, list)
     assert all(
-        isinstance(entity["name"], str)
-        and isinstance(entity["entity_type"], str)
+        isinstance(entity["name"], str) and isinstance(entity["entity_type"], str)
         for entity in record.entities
     )
 
@@ -323,6 +330,195 @@ def test_expired_worker_lease_can_be_reclaimed(enrichment_session):
     assert recovered_claim is not None
     assert recovered_claim.attempt_count == 2
 
+    attempts = list(
+        enrichment_session.scalars(
+            select(MemoryEnrichmentAttempt)
+            .where(MemoryEnrichmentAttempt.memory_id == memory.id)
+            .order_by(MemoryEnrichmentAttempt.attempt_number)
+        )
+    )
+    assert [attempt.outcome for attempt in attempts] == ["unknown", "started"]
+
+
+def test_retry_creates_a_new_attempt_without_overwriting_prior_usage(
+    enrichment_session,
+):
+    session = enrichment_session
+    memory = create_memory(session)
+    repository = MemoryEnrichmentRepository(session)
+    repository.create_or_reset_pending(
+        memory.id,
+        memory.content,
+        schema_version="1.0.0",
+        prompt_version="1.4.0",
+        model="gpt-5-mini",
+    )
+    session.commit()
+
+    now = datetime.now(UTC)
+    first_claim = repository.claim(memory.id, now=now)
+    assert first_claim is not None
+    assert repository.fail(
+        first_claim,
+        error_code="provider_error",
+        retryable=True,
+        now=now,
+    )
+    first_attempt = session.get(MemoryEnrichmentAttempt, first_claim.attempt_id)
+    assert first_attempt is not None
+    first_attempt.input_tokens = 25
+    first_attempt.output_tokens = 5
+    first_attempt.total_tokens = 30
+    session.commit()
+
+    retry_claim = repository.claim(
+        memory.id,
+        now=now + timedelta(seconds=40),
+    )
+    assert retry_claim is not None
+    assert retry_claim.attempt_count == 2
+    assert retry_claim.attempt_id != first_claim.attempt_id
+    assert first_attempt.input_tokens == 25
+    assert first_attempt.total_tokens == 30
+    assert session.get(MemoryEnrichmentAttempt, retry_claim.attempt_id).outcome == (
+        "started"
+    )
+
+
+def test_usage_persistence_is_idempotently_attached_to_claim(enrichment_session):
+    session = enrichment_session
+    memory = create_memory(session)
+    repository = MemoryEnrichmentRepository(session)
+    repository.create_or_reset_pending(
+        memory.id,
+        memory.content,
+        schema_version="1.0.0",
+        prompt_version="1.4.0",
+        model="gpt-5-mini",
+    )
+    session.commit()
+
+    claim = repository.claim(memory.id)
+    assert claim is not None
+    assert session.get(MemoryEnrichmentAttempt, claim.attempt_id) is not None
+    assert repository.claim(memory.id) is None
+    attempts = list(
+        session.scalars(
+            select(MemoryEnrichmentAttempt).where(
+                MemoryEnrichmentAttempt.generation_id == claim.generation_id
+            )
+        )
+    )
+    assert len(attempts) == 1
+
+
+def test_content_reenrichment_keeps_historical_attempt_rows(enrichment_session):
+    session = enrichment_session
+    memory = create_memory(session)
+    repository = MemoryEnrichmentRepository(session)
+    repository.create_or_reset_pending(
+        memory.id,
+        memory.content,
+        schema_version="1.0.0",
+        prompt_version="1.4.0",
+        model="gpt-5-mini",
+    )
+    session.commit()
+    first_claim = repository.claim(memory.id)
+    assert first_claim is not None
+    first_generation = first_claim.generation_id
+
+    repository.create_or_reset_pending(
+        memory.id,
+        "Updated source content.",
+        schema_version="1.0.0",
+        prompt_version="1.4.0",
+        model="gpt-5-mini",
+    )
+    session.commit()
+
+    record = session.get(MemoryEnrichment, memory.id)
+    old_attempt = session.get(MemoryEnrichmentAttempt, first_claim.attempt_id)
+    assert record is not None
+    assert record.generation_id != first_generation
+    assert old_attempt is not None
+    assert old_attempt.generation_id == first_generation
+
+
+def test_memory_deletion_unlinks_but_retains_usage_attempt(enrichment_session):
+    session = enrichment_session
+    memory = create_memory(session)
+    repository = MemoryEnrichmentRepository(session)
+    repository.create_or_reset_pending(
+        memory.id,
+        memory.content,
+        schema_version="1.0.0",
+        prompt_version="1.4.0",
+        model="gpt-5-mini",
+    )
+    session.commit()
+    claim = repository.claim(memory.id)
+    assert claim is not None
+    attempt = session.get(MemoryEnrichmentAttempt, claim.attempt_id)
+    assert attempt is not None
+    attempt.input_tokens = 70
+    attempt.output_tokens = 10
+    attempt.total_tokens = 80
+    session.commit()
+
+    session.delete(session.get(Memory, memory.id))
+    session.commit()
+
+    session.expire(attempt)
+    retained = session.get(MemoryEnrichmentAttempt, claim.attempt_id)
+    assert retained is not None
+    assert retained.memory_id is None
+    assert retained.input_tokens == 70
+    assert retained.total_tokens == 80
+
+
+def test_enrichment_and_usage_rollback_together_on_commit_failure(
+    enrichment_session,
+    monkeypatch,
+):
+    session = enrichment_session
+    memory = create_memory(session)
+    repository = MemoryEnrichmentRepository(session)
+    repository.create_or_reset_pending(
+        memory.id,
+        memory.content,
+        schema_version="1.0.0",
+        prompt_version="1.4.0",
+        model="gpt-5-mini",
+    )
+    session.commit()
+    claim = repository.claim(memory.id)
+    assert claim is not None
+    original_commit = session.commit
+
+    def fail_commit():
+        raise RuntimeError("simulated database commit failure")
+
+    monkeypatch.setattr(session, "commit", fail_commit)
+    with pytest.raises(RuntimeError, match="simulated database commit failure"):
+        repository.complete(
+            claim,
+            create_enrichment(),
+            schema_version="1.0.0",
+            prompt_version="1.4.0",
+            model="gpt-5-mini",
+        )
+    monkeypatch.setattr(session, "commit", original_commit)
+    session.expire_all()
+
+    record = session.get(MemoryEnrichment, memory.id)
+    attempt = session.get(MemoryEnrichmentAttempt, claim.attempt_id)
+    assert record is not None
+    assert record.status == "processing"
+    assert record.summary is None
+    assert attempt is not None
+    assert attempt.outcome == "started"
+
 
 def test_retry_schedule_is_bounded_and_exhausts_after_max_attempts(
     enrichment_session,
@@ -377,3 +573,56 @@ def test_retry_schedule_is_bounded_and_exhausts_after_max_attempts(
     assert record.status == "failed"
     assert record.next_retry_at is None
     assert repository.claim(memory.id, now=now + timedelta(days=1)) is None
+
+
+def test_expired_lease_on_final_attempt_fails_job_and_marks_usage_unknown(
+    enrichment_session,
+):
+    session = enrichment_session
+    memory = create_memory(session)
+    repository = MemoryEnrichmentRepository(session)
+    repository.create_or_reset_pending(
+        memory.id,
+        memory.content,
+        schema_version="1.0.0",
+        prompt_version="1.4.0",
+        model="gpt-5-mini",
+    )
+    session.commit()
+
+    now = datetime.now(UTC)
+    for attempt_number in range(1, MAX_ATTEMPTS + 1):
+        claim = repository.claim(memory.id, now=now)
+        assert claim is not None and claim.attempt_count == attempt_number
+        if attempt_number < MAX_ATTEMPTS:
+            assert repository.fail(
+                claim,
+                error_code="provider_error",
+                retryable=True,
+                now=now,
+            )
+            record = session.get(MemoryEnrichment, memory.id)
+            assert record is not None and record.next_retry_at is not None
+            retry_at = record.next_retry_at
+            if retry_at.tzinfo is None:
+                retry_at = retry_at.replace(tzinfo=UTC)
+            now = retry_at + timedelta(seconds=1)
+        else:
+            attempt = session.get(MemoryEnrichmentAttempt, claim.attempt_id)
+            record = session.get(MemoryEnrichment, memory.id)
+            assert attempt is not None and attempt.outcome == "started"
+            assert record is not None
+            record.lease_expires_at = now - timedelta(seconds=1)
+            session.commit()
+
+    assert repository.fail_expired_final_attempts(now=now) == 1
+    record = session.get(MemoryEnrichment, memory.id)
+    attempt = (
+        session.query(MemoryEnrichmentAttempt)
+        .filter_by(memory_id=memory.id, attempt_number=MAX_ATTEMPTS)
+        .one()
+    )
+    assert record is not None and record.status == "failed"
+    assert record.last_error == "worker_lease_expired"
+    assert record.next_retry_at is None
+    assert attempt.outcome == "unknown"

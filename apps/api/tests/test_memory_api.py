@@ -14,6 +14,7 @@ from app.main import app
 from app.models.base import Base
 from app.models.memory import Memory
 from app.models.memory_enrichment import MemoryEnrichment
+from app.models.memory_enrichment_override import MemoryEnrichmentOverride
 from app.schemas.memory_enrichment import MemoryEnrichmentV1
 
 
@@ -60,6 +61,8 @@ def memory_client(tmp_path, monkeypatch):
     identity = {"user_id": "user-1"}
 
     class NoopEnrichmentService:
+        MODEL = "gpt-5-mini"
+
         async def enrich_with_metadata(self, content):
             return create_enrichment_result()
 
@@ -87,12 +90,14 @@ def memory_client(tmp_path, monkeypatch):
     app.dependency_overrides[get_current_user_id] = (
         lambda: identity["user_id"]
     )
+    app.state.test_session_factory = test_session
 
     try:
         with TestClient(app) as client:
             yield client, identity
     finally:
         app.dependency_overrides.clear()
+        del app.state.test_session_factory
         Base.metadata.drop_all(test_engine)
         test_engine.dispose()
 
@@ -424,6 +429,177 @@ def test_enrichment_status_is_scoped_to_memory_owner(memory_client):
     response = client.get(f"/memories/{created['id']}/enrichment")
 
     assert response.status_code == 404
+
+
+def test_manual_enrichment_correction_preserves_source_and_ai_values(memory_client):
+    client, _ = memory_client
+    created = create_memory(client)
+    memory_id = created.json()["id"]
+    original_content = created.json()["content"]
+
+    response = client.patch(
+        f"/memories/{memory_id}/enrichment",
+        json={
+            "summary": "  Corrected by the user.  ",
+            "category": "work",
+            "memory_type": "preference",
+            "tags": [" Work ", "WORK", "custom-tag"],
+            "entities": [{"name": "  Aura  ", "entity_type": "product"}],
+            "importance": 5,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"] == "Corrected by the user."
+    assert payload["category"] == "work"
+    assert payload["memory_type"] == "preference"
+    assert payload["tags"] == ["work", "custom-tag"]
+    assert payload["entities"] == [{"name": "Aura", "entity_type": "product"}]
+    assert payload["importance"] == 5
+    assert payload["manual_fields"] == [
+        "category",
+        "entities",
+        "importance",
+        "memory_type",
+        "summary",
+        "tags",
+    ]
+    assert client.get(f"/memories/{memory_id}").json()["content"] == original_content
+
+    with client.app.state.test_session_factory() as session:
+        memory = session.get(Memory, memory_id)
+        enrichment = session.get(MemoryEnrichment, memory_id)
+        override = session.get(MemoryEnrichmentOverride, memory_id)
+        assert memory is not None
+        assert memory.content == original_content
+        assert enrichment is not None
+        assert enrichment.summary == "Test memory summary"
+        assert enrichment.category is None
+        assert enrichment.tags == ["test-memory"]
+        assert override is not None
+        assert override.overrides["summary"] == "Corrected by the user."
+
+
+def test_manual_enrichment_correction_can_clear_and_reset_overrides(memory_client):
+    client, _ = memory_client
+    memory_id = create_memory(client).json()["id"]
+
+    edited = client.patch(
+        f"/memories/{memory_id}/enrichment",
+        json={"summary": None, "tags": []},
+    )
+    assert edited.status_code == 200
+    assert edited.json()["summary"] is None
+    assert edited.json()["tags"] == []
+    assert set(edited.json()["manual_fields"]) == {"summary", "tags"}
+
+    reset = client.patch(
+        f"/memories/{memory_id}/enrichment",
+        json={"clear_overrides": ["summary", "tags"]},
+    )
+    assert reset.status_code == 200
+    assert reset.json()["summary"] == "Test memory summary"
+    assert reset.json()["tags"] == ["test-memory"]
+    assert reset.json()["manual_fields"] == []
+
+
+def test_manual_enrichment_override_survives_content_reenrichment(memory_client):
+    client, _ = memory_client
+    memory_id = create_memory(client).json()["id"]
+    manual_summary = client.patch(
+        f"/memories/{memory_id}/enrichment",
+        json={"summary": "Keep my corrected summary."},
+    )
+    assert manual_summary.status_code == 200
+
+    updated = client.patch(
+        f"/memories/{memory_id}",
+        json={"content": "Changed original memory text."},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["content"] == "Changed original memory text."
+
+    effective = client.get(f"/memories/{memory_id}/enrichment")
+    assert effective.status_code == 200
+    assert effective.json()["summary"] == "Keep my corrected summary."
+    assert effective.json()["manual_fields"] == ["summary"]
+
+    with client.app.state.test_session_factory() as session:
+        memory = session.get(Memory, memory_id)
+        enrichment = session.get(MemoryEnrichment, memory_id)
+        assert memory is not None
+        assert memory.content == "Changed original memory text."
+        assert enrichment is not None
+        assert enrichment.summary == "Test memory summary"
+
+
+def test_manual_enrichment_correction_queues_missing_enrichment(memory_client):
+    client, _ = memory_client
+    with client.app.state.test_session_factory() as session:
+        memory = Memory(
+            title="Legacy memory",
+            content="Original legacy text.",
+            user_id="user-1",
+        )
+        session.add(memory)
+        session.commit()
+        memory_id = memory.id
+
+    response = client.patch(
+        f"/memories/{memory_id}/enrichment",
+        json={"summary": "Manually added summary."},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "pending"
+    completed = client.get(f"/memories/{memory_id}/enrichment")
+    assert completed.status_code == 200
+    assert completed.json()["status"] == "completed"
+    assert completed.json()["summary"] == "Manually added summary."
+    with client.app.state.test_session_factory() as session:
+        memory = session.get(Memory, memory_id)
+        assert memory is not None
+        assert memory.content == "Original legacy text."
+
+
+def test_manual_enrichment_correction_is_scoped_to_memory_owner(memory_client):
+    client, identity = memory_client
+    memory_id = create_memory(client).json()["id"]
+    identity["user_id"] = "user-2"
+
+    response = client.patch(
+        f"/memories/{memory_id}/enrichment",
+        json={"summary": "Someone else's memory."},
+    )
+
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"summary": "   "},
+        {"summary": "x" * 501},
+        {"category": "unsupported"},
+        {"memory_type": "unsupported"},
+        {"importance": 6},
+        {"tags": ["x" * 65]},
+        {"tags": ["  "]},
+        {"tags": ["🔥"]},
+        {"tags": None},
+        {"entities": [{"name": "x" * 101, "entity_type": "person"}]},
+        {"unexpected": "value"},
+        {},
+    ],
+)
+def test_manual_enrichment_correction_rejects_invalid_data(memory_client, payload):
+    client, _ = memory_client
+    memory_id = create_memory(client).json()["id"]
+
+    response = client.patch(f"/memories/{memory_id}/enrichment", json=payload)
+
+    assert response.status_code == 422
 def test_list_ordering_is_stable_across_pages(memory_client):
     client, _ = memory_client
     notes = [create_memory(client, title=f"Note {index}").json() for index in range(3)]

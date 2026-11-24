@@ -28,6 +28,67 @@ export interface MemoryInput {
   is_favorite: boolean;
 }
 
+export type EnrichmentState = 'pending' | 'processing' | 'completed' | 'failed';
+
+export type EnrichmentField =
+  | 'summary'
+  | 'category'
+  | 'memory_type'
+  | 'tags'
+  | 'entities'
+  | 'importance';
+
+export type EnrichedCategory =
+  | 'personal'
+  | 'work'
+  | 'learning'
+  | 'project'
+  | 'finance'
+  | 'health'
+  | 'other';
+
+export type MemoryType =
+  | 'fact'
+  | 'preference'
+  | 'goal'
+  | 'achievement'
+  | 'event'
+  | 'decision'
+  | 'instruction'
+  | 'other';
+
+export type EntityType =
+  | 'person'
+  | 'organization'
+  | 'technology'
+  | 'product'
+  | 'location'
+  | 'certification'
+  | 'role'
+  | 'other';
+
+export interface EnrichmentEntity {
+  name: string;
+  entity_type: EntityType;
+}
+
+/** Effective metadata returned by AURA-59, including manual overrides. */
+export interface MemoryEnrichment {
+  memory_id: string;
+  status: EnrichmentState;
+  attempt_count: number;
+  last_error: string | null;
+  next_retry_at: string | null;
+  completed_at: string | null;
+  summary: string | null;
+  category: EnrichedCategory | null;
+  memory_type: MemoryType | null;
+  tags: string[];
+  entities: EnrichmentEntity[];
+  importance: number | null;
+  manual_fields: EnrichmentField[];
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -105,6 +166,14 @@ export function listMemories(
   if (filters.favoritesOnly) params.set('is_favorite', 'true');
   const suffix = params.size ? `?${params.toString()}` : '';
   return request<Memory[]>(`/memories${suffix}`, {}, token);
+}
+
+export function getMemoryEnrichment(token: string, id: string) {
+  return request<MemoryEnrichment>(
+    `/memories/${encodeURIComponent(id)}/enrichment`,
+    {},
+    token,
+  );
 }
 
 export function createMemory(token: string, data: MemoryInput) {

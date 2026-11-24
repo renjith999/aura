@@ -8,14 +8,27 @@ import {
   logout,
   register,
   updateMemory,
+  type EnrichmentField,
+  type MemoryEnrichment,
   type Memory,
   type MemoryInput,
 } from './api';
+import {
+  EnrichmentRequestCancelled,
+  MemoryEnrichmentCache,
+} from './enrichmentCache';
 
 const TOKEN_KEY = 'aura.access-token';
 const EMAIL_KEY = 'aura.account-email';
 
 type EditorState = { mode: 'create' } | { mode: 'edit'; memory: Memory } | null;
+type EnrichmentView =
+  | { state: 'loading' }
+  | { state: 'unavailable' }
+  | { state: 'error'; message: string }
+  | { state: 'ready'; data: MemoryEnrichment };
+
+const ENRICHMENT_POLL_INTERVAL_MS = 2500;
 
 function App() {
   const [token, setToken] = useState(() => sessionStorage.getItem(TOKEN_KEY));
@@ -33,9 +46,14 @@ function App() {
   const [categoryFilter, setCategoryFilter] = useState('');
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [editor, setEditor] = useState<EditorState>(null);
+  const [detailsMemory, setDetailsMemory] = useState<Memory | null>(null);
+  const [enrichmentById, setEnrichmentById] = useState<Record<string, EnrichmentView>>({});
   const [actionBusy, setActionBusy] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const searchInput = useRef<HTMLInputElement>(null);
+  const enrichmentCache = useRef<MemoryEnrichmentCache | null>(null);
+  if (!enrichmentCache.current) enrichmentCache.current = new MemoryEnrichmentCache();
+  const closeDetails = useCallback(() => setDetailsMemory(null), []);
 
   const clearSession = useCallback((message = '') => {
     sessionStorage.removeItem(TOKEN_KEY);
@@ -43,9 +61,18 @@ function App() {
     setToken(null);
     setEmail('');
     setMemories([]);
+    setEnrichmentById({});
+    setDetailsMemory(null);
+    enrichmentCache.current?.clear();
     setNotice('');
     setAuthError(message);
   }, []);
+
+  useEffect(() => {
+    enrichmentCache.current?.clear();
+    setEnrichmentById({});
+    setDetailsMemory(null);
+  }, [token]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => setAppliedSearch(search.trim()), 220);
@@ -112,6 +139,103 @@ function App() {
     };
   }, [token, appliedSearch, categoryFilter, favoritesOnly, reloadKey, clearSession]);
 
+  const loadEnrichment = useCallback(
+    async (memoryId: string, refresh = false, isCurrent: () => boolean = () => true) => {
+      if (!token) return null;
+      try {
+        const cache = enrichmentCache.current!;
+        const data = refresh
+          ? await cache.refresh(token, memoryId)
+          : await cache.get(token, memoryId);
+        if (isCurrent()) {
+          setEnrichmentById((previous) => ({
+            ...previous,
+            [memoryId]: data ? { state: 'ready', data } : { state: 'unavailable' },
+          }));
+        }
+        return data;
+      } catch (error) {
+        if (error instanceof EnrichmentRequestCancelled || !isCurrent()) return null;
+        if (error instanceof ApiError && error.status === 401) {
+          clearSession('Your session expired. Sign in again to continue.');
+        } else if (
+          error instanceof ApiError &&
+          error.status === 404 &&
+          error.message === 'Memory not found.'
+        ) {
+          enrichmentCache.current!.invalidate(memoryId);
+          setEnrichmentById((previous) => {
+            const next = { ...previous };
+            delete next[memoryId];
+            return next;
+          });
+          setDetailsMemory((current) => (current?.id === memoryId ? null : current));
+          setReloadKey((value) => value + 1);
+        } else {
+          setEnrichmentById((previous) => ({
+            ...previous,
+            [memoryId]: { state: 'error', message: errorMessage(error) },
+          }));
+        }
+        return null;
+      }
+    },
+    [token, clearSession],
+  );
+
+  useEffect(() => {
+    if (!token || memories.length === 0) return;
+    let current = true;
+    const memoryIds = memories.map((memory) => memory.id);
+
+    setEnrichmentById((previous) => {
+      const next = { ...previous };
+      for (const memoryId of memoryIds) {
+        if (!next[memoryId]) next[memoryId] = { state: 'loading' };
+      }
+      return next;
+    });
+
+    void Promise.all(memoryIds.map((memoryId) => loadEnrichment(memoryId, false, () => current)));
+    return () => {
+      current = false;
+    };
+  }, [token, memories, loadEnrichment]);
+
+  useEffect(() => {
+    if (!token) return;
+    const visibleIds = new Set(memories.map((memory) => memory.id));
+    if (detailsMemory) visibleIds.add(detailsMemory.id);
+    const activeIds = Object.entries(enrichmentById)
+      .filter(
+        ([memoryId, value]) =>
+          visibleIds.has(memoryId) &&
+          value.state === 'ready' &&
+          (value.data.status === 'pending' || value.data.status === 'processing'),
+      )
+      .map(([memoryId]) => memoryId);
+    if (activeIds.length === 0) return;
+
+    let current = true;
+    const timer = window.setTimeout(() => {
+      void Promise.all(
+        activeIds.map((memoryId) => loadEnrichment(memoryId, true, () => current)),
+      );
+    }, ENRICHMENT_POLL_INTERVAL_MS);
+    return () => {
+      current = false;
+      window.clearTimeout(timer);
+    };
+  }, [token, memories, detailsMemory, enrichmentById, loadEnrichment]);
+
+  async function retryEnrichment(memoryId: string) {
+    setEnrichmentById((previous) => ({
+      ...previous,
+      [memoryId]: { state: 'loading' },
+    }));
+    await loadEnrichment(memoryId, true);
+  }
+
   const categories = useMemo(
     () =>
       [...new Set(allMemories.map((memory) => memory.category))].sort((a, b) => a.localeCompare(b)),
@@ -171,6 +295,13 @@ function App() {
     try {
       if (editor?.mode === 'edit') {
         await updateMemory(token, editor.memory.id, data);
+        if (data.content !== editor.memory.content) {
+          enrichmentCache.current!.invalidate(editor.memory.id);
+          setEnrichmentById((previous) => ({
+            ...previous,
+            [editor.memory.id]: { state: 'loading' },
+          }));
+        }
         setNotice('Memory updated.');
       } else {
         await createMemory(token, data);
@@ -214,6 +345,13 @@ function App() {
     setListError('');
     try {
       await deleteMemory(token, memory.id);
+      enrichmentCache.current!.invalidate(memory.id);
+      setEnrichmentById((previous) => {
+        const next = { ...previous };
+        delete next[memory.id];
+        return next;
+      });
+      if (detailsMemory?.id === memory.id) setDetailsMemory(null);
       setNotice('Memory deleted.');
       setReloadKey((value) => value + 1);
     } catch (error) {
@@ -484,10 +622,13 @@ function App() {
                 <MemoryCard
                   key={memory.id}
                   memory={memory}
+                  enrichment={enrichmentById[memory.id] ?? { state: 'loading' }}
                   busy={actionBusy}
                   onFavorite={() => toggleFavorite(memory)}
                   onEdit={() => setEditor({ mode: 'edit', memory })}
                   onDelete={() => removeMemory(memory)}
+                  onDetails={() => setDetailsMemory(memory)}
+                  onRetryEnrichment={() => void retryEnrichment(memory.id)}
                 />
               ))}
             </div>
@@ -506,6 +647,15 @@ function App() {
             setListError('');
           }}
           onSave={saveMemory}
+        />
+      )}
+      {detailsMemory && (
+        <MemoryDetails
+          key={detailsMemory.id}
+          memory={detailsMemory}
+          enrichment={enrichmentById[detailsMemory.id] ?? { state: 'loading' }}
+          onClose={closeDetails}
+          onRetry={() => void retryEnrichment(detailsMemory.id)}
         />
       )}
     </div>
@@ -694,23 +844,29 @@ function EmptyState({
 
 function MemoryCard({
   memory,
+  enrichment,
   busy,
   onFavorite,
   onEdit,
   onDelete,
+  onDetails,
+  onRetryEnrichment,
 }: {
   memory: Memory;
+  enrichment: EnrichmentView;
   busy: boolean;
   onFavorite: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  onDetails: () => void;
+  onRetryEnrichment: () => void;
 }) {
   return (
     <article className="memory-card">
       <div className="memory-card-top">
         <span className={`category-tag category-${categoryTone(memory.category)}`}>
           <i aria-hidden="true" />
-          {categoryLabel(memory.category)}
+          Saved: {categoryLabel(memory.category)}
         </span>
         <button
           className={`favorite-button ${memory.is_favorite ? 'is-favorite' : ''}`}
@@ -724,13 +880,17 @@ function MemoryCard({
         </button>
       </div>
       <h3>{memory.title}</h3>
-      <p className="memory-content">{memory.content}</p>
+      <EnrichmentCardPreview enrichment={enrichment} onRetry={onRetryEnrichment} />
       <div className="memory-card-bottom">
         <span className="memory-date">
           <span aria-hidden="true">◷</span>
           {formatDate(memory.updated_at)}
         </span>
         <div className="card-actions">
+          <button type="button" onClick={onDetails} aria-label={`View details for ${memory.title}`}>
+            Details
+          </button>
+          <span aria-hidden="true">·</span>
           <button
             type="button"
             onClick={onEdit}
@@ -752,6 +912,304 @@ function MemoryCard({
         </div>
       </div>
     </article>
+  );
+}
+
+function EnrichmentCardPreview({
+  enrichment,
+  onRetry,
+}: {
+  enrichment: EnrichmentView;
+  onRetry: () => void;
+}) {
+  if (enrichment.state === 'loading') {
+    return (
+      <div className="enrichment-preview loading" role="status" aria-label="Loading enrichment">
+        <span className="enrichment-skeleton" />
+      </div>
+    );
+  }
+  if (enrichment.state === 'unavailable') {
+    return <p className="enrichment-note">Enrichment is not available.</p>;
+  }
+  if (enrichment.state === 'error') {
+    return (
+      <div className="enrichment-error" role="alert">
+        <span>Enrichment could not be loaded.</span>
+        <button type="button" onClick={onRetry}>
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  const { data } = enrichment;
+  const summarySource = data.manual_fields.includes('summary') ? 'Manual' : 'AI';
+  const categorySource = data.manual_fields.includes('category') ? 'Manual' : 'AI';
+  return (
+    <div className="enrichment-preview">
+      <div className="enrichment-card-status">
+        <EnrichmentStatusBadge status={data.status} />
+      </div>
+      {data.summary ? (
+        <p className="enrichment-summary-preview">
+          <span>{summarySource} summary</span>
+          {data.summary}
+        </p>
+      ) : (
+        <p className="enrichment-note">No summary available.</p>
+      )}
+      <div className="enrichment-chip-row">
+        {data.category && (
+          <span className={`enrichment-category category-${categoryTone(data.category)}`}>
+            {categorySource} category: {humanize(data.category)}
+          </span>
+        )}
+        {data.tags.slice(0, 2).map((tag) => (
+          <span className="metadata-chip" key={tag}>
+            {tag}
+          </span>
+        ))}
+        {data.tags.length > 2 && (
+          <span className="metadata-chip metadata-chip-more">+{data.tags.length - 2}</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function EnrichmentStatusBadge({ status }: { status: MemoryEnrichment['status'] }) {
+  const labels: Record<MemoryEnrichment['status'], string> = {
+    pending: 'Waiting',
+    processing: 'Processing',
+    completed: 'Enriched',
+    failed: 'Enrichment failed',
+  };
+  return (
+    <span className={`enrichment-status status-${status}`} aria-label={`Enrichment ${labels[status]}`}>
+      <span aria-hidden="true" />
+      {labels[status]}
+    </span>
+  );
+}
+
+function MemoryDetails({
+  memory,
+  enrichment,
+  onClose,
+  onRetry,
+}: {
+  memory: Memory;
+  enrichment: EnrichmentView;
+  onClose: () => void;
+  onRetry: () => void;
+}) {
+  const dialogRef = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const dialog = dialogRef.current;
+    dialog?.querySelector<HTMLElement>('button, [href], input, select, textarea')?.focus();
+
+    function handleDialogKeys(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab' || !dialog) return;
+      const focusable = Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), [href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex="-1"])',
+        ),
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable.at(-1);
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    }
+
+    document.addEventListener('keydown', handleDialogKeys);
+    return () => {
+      document.removeEventListener('keydown', handleDialogKeys);
+      previouslyFocused?.focus();
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      className="modal-backdrop details-backdrop"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <section
+        className="editor-modal details-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="memory-details-title"
+        ref={dialogRef}
+      >
+        <div className="modal-heading">
+          <div>
+            <p className="eyebrow">MEMORY DETAILS</p>
+            <h2 id="memory-details-title">{memory.title}</h2>
+          </div>
+          <button
+            className="icon-button modal-close"
+            type="button"
+            onClick={onClose}
+            aria-label="Close memory details"
+            autoFocus
+          >
+            ×
+          </button>
+        </div>
+
+        <section className="details-original" aria-labelledby="original-memory-heading">
+          <div className="details-section-heading">
+            <h3 id="original-memory-heading">Original memory</h3>
+            <span>Saved exactly as written</span>
+          </div>
+          <p className="details-original-content">{memory.content}</p>
+          <p className="details-saved-category">
+            Saved category: <strong>{categoryLabel(memory.category)}</strong>
+          </p>
+        </section>
+
+        <section className="details-enrichment" aria-labelledby="enrichment-heading">
+          <div className="details-section-heading">
+            <h3 id="enrichment-heading">Enriched metadata</h3>
+            {enrichment.state === 'ready' && (
+              <EnrichmentStatusBadge status={enrichment.data.status} />
+            )}
+          </div>
+          {enrichment.state === 'loading' ? (
+            <div className="details-loading" role="status">
+              <span className="spinner" aria-hidden="true" />
+              Loading enrichment…
+            </div>
+          ) : enrichment.state === 'unavailable' ? (
+            <p className="enrichment-note">Enrichment is not available for this memory.</p>
+          ) : enrichment.state === 'error' ? (
+            <div className="details-error" role="alert">
+              <span>Enrichment could not be loaded. {enrichment.message}</span>
+              <button className="button button-outline" type="button" onClick={onRetry}>
+                Retry
+              </button>
+            </div>
+          ) : (
+            <EnrichmentDetails data={enrichment.data} />
+          )}
+        </section>
+      </section>
+    </div>
+  );
+}
+
+function EnrichmentDetails({ data }: { data: MemoryEnrichment }) {
+  const manuallyOverridden = (field: EnrichmentField) => data.manual_fields.includes(field);
+  const emptyValue = (field: EnrichmentField) =>
+    manuallyOverridden(field) ? 'Cleared manually' : 'Not available';
+
+  return (
+    <>
+      <div className="details-status-copy" aria-live="polite">
+        {data.status === 'pending' && <p>Enrichment is queued for processing.</p>}
+        {data.status === 'processing' && <p>Aura is analyzing this memory.</p>}
+        {data.status === 'completed' && <p>Enrichment is complete.</p>}
+        {data.status === 'failed' && (
+          <p>
+            Enrichment could not be completed after {data.attempt_count} attempt
+            {data.attempt_count === 1 ? '' : 's'}.
+            {data.next_retry_at
+              ? ` Another attempt is scheduled for ${formatDateTime(data.next_retry_at)}.`
+              : ' No retry is scheduled.'}
+          </p>
+        )}
+      </div>
+
+      <dl className="enrichment-details-list">
+        <MetadataDetail
+          label="Summary"
+          field="summary"
+          value={data.summary}
+          emptyLabel={emptyValue('summary')}
+          manual={manuallyOverridden('summary')}
+        />
+        <MetadataDetail
+          label="Enriched category"
+          field="category"
+          value={data.category ? humanize(data.category) : null}
+          emptyLabel={emptyValue('category')}
+          manual={manuallyOverridden('category')}
+        />
+        <MetadataDetail
+          label="Memory type"
+          field="memory_type"
+          value={data.memory_type ? humanize(data.memory_type) : null}
+          emptyLabel={emptyValue('memory_type')}
+          manual={manuallyOverridden('memory_type')}
+        />
+        <MetadataDetail
+          label="Tags"
+          field="tags"
+          value={data.tags.length ? data.tags.join(', ') : null}
+          emptyLabel={emptyValue('tags')}
+          manual={manuallyOverridden('tags')}
+        />
+        <MetadataDetail
+          label="Entities"
+          field="entities"
+          value={
+            data.entities.length
+              ? data.entities.map((entity) => `${entity.name} · ${humanize(entity.entity_type)}`).join(', ')
+              : null
+          }
+          emptyLabel={emptyValue('entities')}
+          manual={manuallyOverridden('entities')}
+        />
+        <MetadataDetail
+          label="Importance"
+          field="importance"
+          value={data.importance === null ? null : `${data.importance} out of 5`}
+          emptyLabel={emptyValue('importance')}
+          manual={manuallyOverridden('importance')}
+        />
+      </dl>
+    </>
+  );
+}
+
+function MetadataDetail({
+  label,
+  field,
+  value,
+  emptyLabel,
+  manual,
+}: {
+  label: string;
+  field: EnrichmentField;
+  value: string | null;
+  emptyLabel: string;
+  manual: boolean;
+}) {
+  return (
+    <div className="metadata-detail-row" data-field={field}>
+      <dt>{label}</dt>
+      <dd>
+        <span className={value === null ? 'metadata-empty' : ''}>{value ?? emptyLabel}</span>
+        <span className={`metadata-origin ${manual ? 'origin-manual' : 'origin-ai'}`}>
+          {manual ? 'Manually corrected' : 'AI-generated'}
+        </span>
+      </dd>
+    </div>
   );
 }
 
@@ -883,6 +1341,10 @@ function categoryLabel(category: string) {
   return category === 'uncategorized' ? 'Uncategorized' : category;
 }
 
+function humanize(value: string) {
+  return value.replaceAll('_', ' ').replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 function categoryTone(category: string) {
   const tones = ['lavender', 'peach', 'mint', 'blue'];
   let hash = 0;
@@ -897,6 +1359,18 @@ function formatDate(value: string) {
     month: 'short',
     day: 'numeric',
     year: 'numeric',
+  }).format(date);
+}
+
+function formatDateTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'a later time';
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
   }).format(date);
 }
 

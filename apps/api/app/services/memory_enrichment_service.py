@@ -83,7 +83,7 @@ class MemoryEnrichmentService:
 
     def __init__(self, client: AsyncOpenAI | None = None) -> None:
         self.client: Any = client or AsyncOpenAI(
-            api_key=settings.openai_api_key,
+            api_key=settings.openai_api_key.get_secret_value(),
             timeout=40.0,
             max_retries=0,
         )

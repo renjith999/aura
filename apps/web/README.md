@@ -1,6 +1,6 @@
 # Aura Web
 
-The React + Vite client for Aura's Phase 1 memory app.
+The React + Vite client for Aura's memory application.
 
 ## Run locally
 

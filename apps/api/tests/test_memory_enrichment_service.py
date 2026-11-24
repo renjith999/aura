@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from openai import OpenAIError
+from pydantic import SecretStr
 
 from app.core.config import settings
 from app.prompts.memory_enrichment.registry import (
@@ -29,6 +30,8 @@ def create_test_service():
 def test_default_client_uses_approved_timeout_and_application_retries(
     monkeypatch,
 ):
+    dummy_api_key = "sk-test-dummy-enrichment-key"
+    monkeypatch.setattr(settings, "openai_api_key", SecretStr(dummy_api_key))
     constructor = Mock()
     monkeypatch.setattr(
         "app.services.memory_enrichment_service.AsyncOpenAI",
@@ -37,10 +40,13 @@ def test_default_client_uses_approved_timeout_and_application_retries(
     MemoryEnrichmentService()
 
     constructor.assert_called_once_with(
-        api_key=settings.openai_api_key,
+        api_key=dummy_api_key,
         timeout=40.0,
         max_retries=0,
     )
+    passed_api_key = constructor.call_args.kwargs["api_key"]
+    assert not isinstance(passed_api_key, SecretStr)
+    assert str(settings.openai_api_key) not in passed_api_key
 
 
 def create_enrichment():
@@ -207,6 +213,21 @@ async def test_enrich_handles_openai_error():
         await service.enrich("Some memory content")
     assert error.value.attempt.request_id == "req-provider-error"
     assert error.value.attempt.usage is None
+
+
+@pytest.mark.asyncio
+async def test_provider_error_does_not_expose_api_key_in_error_or_logs(caplog):
+    dummy_api_key = "sk-test-dummy-enrichment-key"
+    service = create_test_service()
+    service.client.responses.create.side_effect = OpenAIError(
+        f"Provider error containing {dummy_api_key}"
+    )
+
+    with pytest.raises(MemoryEnrichmentProviderError) as error:
+        await service.enrich("Some memory content")
+
+    assert dummy_api_key not in str(error.value)
+    assert dummy_api_key not in caplog.text
 
 
 @pytest.mark.asyncio

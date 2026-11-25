@@ -23,6 +23,14 @@ class Settings(BaseSettings):
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
     openai_api_key: SecretStr = Field(default=SecretStr(""), repr=False)
+    embedding_provider: Literal["openai", "sentence-transformers"] = "openai"
+    openai_embedding_model: str = Field(
+        default="text-embedding-3-small", min_length=1, max_length=100
+    )
+    openai_embedding_dimensions: int = Field(default=1536, ge=1, le=3072)
+    sentence_transformers_model: str = Field(
+        default="sentence-transformers/all-MiniLM-L6-v2", min_length=1, max_length=200
+    )
     openai_pricing_version: str = Field(
         default="unconfigured", min_length=1, max_length=80
     )
@@ -53,6 +61,11 @@ class Settings(BaseSettings):
         if not value.strip():
             raise ValueError("Value must not be blank.")
         return value
+
+    @field_validator("embedding_provider", mode="before")
+    @classmethod
+    def normalize_embedding_provider(cls, value: object) -> object:
+        return value.lower() if isinstance(value, str) else value
 
     @field_validator("environment", mode="before")
     @classmethod
